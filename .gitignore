@@ -1,0 +1,56 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment and secrets (never commit real API keys)
+.env
+.env.local
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local data (uploads and indexes — adjust if you want to track small samples)
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/sample_phase2.txt
+data/indexes/*
+!data/indexes/.gitkeep
+
+# 2024-08-27
+
+# 2024-09-17
+
+# 2024-10-11
+
+# 2024-10-31
+
+# 2024-08-27
+
+# 2024-09-17
