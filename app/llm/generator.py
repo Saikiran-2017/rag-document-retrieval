@@ -8,6 +8,8 @@ reference [SOURCE n] labels that match the numbered context blocks.
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,14 +17,30 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.config import get_openai_api_key
+from app.llm.answer_validation import validate_grounded_answer, validate_web_markdown_links
+from app.services.message_service import merge_notes
 from app.retrieval.vector_store import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
+_WEB_BLOCK_URL_RE = re.compile(r"^URL:\s*(\S+)", re.MULTILINE)
+
+
+def _urls_from_web_context_block(web_context_block: str) -> list[str]:
+    return _WEB_BLOCK_URL_RE.findall(web_context_block or "")
+
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
 # FAISS L2 distance on retrieved chunks: lower is closer. Above this, treat as weak match.
-USEFUL_RETRIEVAL_MAX_L2 = 1.25
+USEFUL_RETRIEVAL_MAX_L2 = 1.18
+# Hybrid (BM25 + vector + RRF): stricter gates — prefer web/general over weak doc grounding.
+_HYBRID_MAX_L2 = 1.02
+_HYBRID_MIN_RRF = 0.014
+_HYBRID_VERY_GOOD_L2 = 0.82
+# Document tasks (summarize / compare) allow slightly looser top-hit retrieval.
+_HYBRID_TASK_MAX_L2 = 1.1
+_HYBRID_TASK_MIN_RRF = 0.012
+_HYBRID_TASK_VERY_GOOD_L2 = 0.9
 
 UNKNOWN_PHRASE = "I don't know based on the provided documents."
 
@@ -45,9 +63,11 @@ Rules:
 - Evidence is ONLY the text under the line "Text:" inside each [SOURCE N] block. Ignore any training knowledge.
 - If the evidence is insufficient to answer, reply with exactly this sentence and nothing else: {UNKNOWN_PHRASE}
 - Do not guess, speculate, or infer facts that are not clearly supported by the Text lines.
-- Do not invent [SOURCE N] labels; only use numbers N that appear in the CONTEXT.
+- Do not use "probably", "likely", or "typically" unless that exact uncertainty appears in the Text.
+- Do not invent [SOURCE N] labels; only use numbers N that appear in the CONTEXT (1 through the highest [SOURCE N] shown).
 - When you state a fact from the Text, cite it with the matching label, e.g. [SOURCE 1].
 - If two Text passages contradict each other, say so briefly and cite both sources.
+- If the question asks for content not present in the Text lines, say so and use the unknown phrase above.
 - Keep the answer concise and directly responsive to the question."""
 
 
@@ -73,6 +93,8 @@ class GroundedAnswer:
 
     answer: str
     sources: tuple[SourceRef, ...]
+    # Optional note from post-generation checks (citation / overlap); surfaced via assistant_note.
+    validation_warning: str | None = None
 
 
 def _normalize_page_label(meta: dict[str, Any]) -> str:
@@ -105,7 +127,7 @@ def chunks_to_source_refs(chunks: list[RetrievedChunk]) -> tuple[SourceRef, ...]
 
 
 # Cap per-chunk text in the prompt for lower latency and token cost (UI unchanged).
-_MAX_CONTEXT_CHARS_PER_CHUNK = 3200
+_MAX_CONTEXT_CHARS_PER_CHUNK = 2000
 
 
 def _truncate_chunk_text(text: str, max_chars: int = _MAX_CONTEXT_CHARS_PER_CHUNK) -> str:
@@ -129,11 +151,7 @@ def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
         m = h.metadata
         body = _truncate_chunk_text(h.page_content)
         blocks.append(
-            f"[SOURCE {i}]\n"
-            f"chunk_id: {_meta_str(m, 'chunk_id')}\n"
-            f"source_name: {_meta_str(m, 'source_name')}\n"
-            f"file_path: {_meta_str(m, 'file_path')}\n"
-            f"page_number: {_normalize_page_label(m)}\n"
+            f"[SOURCE {i}] {_meta_str(m, 'source_name')} · p.{_normalize_page_label(m)}\n"
             f"Text:\n{body}"
         )
     return "\n\n---\n\n".join(blocks)
@@ -149,6 +167,20 @@ def build_grounded_messages(query: str, context_block: str) -> list[SystemMessag
         f"If you cannot answer from the Text, reply exactly: {UNKNOWN_PHRASE}"
     )
     return [SystemMessage(content=GROUNDING_SYSTEM_PROMPT), HumanMessage(content=user_body)]
+
+
+def _yield_llm_stream(model: ChatOpenAI, messages: list[SystemMessage | HumanMessage]) -> Iterator[str]:
+    for chunk in model.stream(messages):
+        c = getattr(chunk, "content", None)
+        if c:
+            if isinstance(c, str):
+                yield c
+            elif isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        yield str(b.get("text", ""))
+                    elif isinstance(b, str):
+                        yield b
 
 
 def _coerce_text_content(content: Any) -> str:
@@ -186,8 +218,8 @@ def create_chat_llm(
 _GENERAL_ANSWER_MAX_TOKENS = 600
 
 # Caps grounded completion length; answers stay citation-focused.
-_GROUNDED_ANSWER_MAX_TOKENS = 1200
-_DOCUMENT_TASK_MAX_TOKENS = 1400
+_GROUNDED_ANSWER_MAX_TOKENS = 900
+_DOCUMENT_TASK_MAX_TOKENS = 1200
 
 # Document-centric tasks (summarize / extract / compare): same evidence rules as Q&A, different output shape.
 SUMMARIZE_SYSTEM_PROMPT = f"""You summarize text supplied only in [SOURCE N] blocks below. Evidence is ONLY the lines under "Text:" in each block.
@@ -198,8 +230,8 @@ Output format (use Markdown):
 3. If the excerpts clearly do not cover the topic, say so in one short sentence (you may phrase like: {UNKNOWN_PHRASE}).
 
 Rules:
-- Cite [SOURCE N] for specific claims taken from the Text.
-- Do not invent content not supported by the Text lines."""
+- Cite [SOURCE N] for specific claims taken from the Text. Only use source numbers that appear in CONTEXT.
+- Do not invent content not supported by the Text lines. Do not infer beyond what the excerpts state."""
 
 EXTRACT_SYSTEM_PROMPT = f"""You extract structured information from text in [SOURCE N] blocks. Evidence is ONLY the lines under "Text:" in each block.
 
@@ -279,7 +311,8 @@ def generate_document_task_answer(
     answer = _coerce_text_content(response.content).strip()
     if not answer:
         answer = UNKNOWN_PHRASE
-    return GroundedAnswer(answer=answer, sources=sources)
+    fixed, warn = validate_grounded_answer(answer, retrieved_chunks, unknown_phrase=UNKNOWN_PHRASE)
+    return GroundedAnswer(answer=fixed, sources=sources, validation_warning=warn)
 
 
 def generate_general_answer(
@@ -324,6 +357,214 @@ def retrieval_is_useful(
     return float(hits[0].distance) <= float(max_l2_distance)
 
 
+def hybrid_retrieval_is_useful(
+    hits: list[RetrievedChunk],
+    *,
+    for_document_task: bool = False,
+) -> bool:
+    """
+    Gate after hybrid RRF + rerank: require vector similarity and fusion mass,
+    unless the vector match is very strong (distance alone).
+    """
+    if not hits:
+        return False
+    h = hits[0]
+    d = float(h.distance)
+    rrf = float(h.metadata.get("rrf_score", 0.0) or 0.0)
+    if for_document_task:
+        max_l2 = _HYBRID_TASK_MAX_L2
+        min_rrf = _HYBRID_TASK_MIN_RRF
+        very_good = _HYBRID_TASK_VERY_GOOD_L2
+    else:
+        max_l2 = _HYBRID_MAX_L2
+        min_rrf = _HYBRID_MIN_RRF
+        very_good = _HYBRID_VERY_GOOD_L2
+    if rrf > 0:
+        strong_vec = d <= very_good
+        fusion_ok = d <= max_l2 and rrf >= min_rrf
+        return fusion_ok or strong_vec
+    return d <= USEFUL_RETRIEVAL_MAX_L2
+
+
+# Stricter than hybrid_retrieval_is_useful: when a file is only partially trusted
+# (ready_limited) or the library has no fully healthy file, require a clearly strong match.
+_LIMITED_QA_MAX_L2 = 0.74
+_LIMITED_QA_MIN_RRF = 0.016
+_LIMITED_TASK_MAX_L2 = 0.92
+_LIMITED_TASK_MIN_RRF = 0.013
+
+
+def hybrid_hit_strong_for_limited_corpora(
+    hit: RetrievedChunk,
+    *,
+    for_document_task: bool = False,
+) -> bool:
+    """True when the top hit is strong enough to ground answers for weak-trust documents."""
+    d = float(hit.distance)
+    rrf = float(hit.metadata.get("rrf_score", 0.0) or 0.0)
+    if for_document_task:
+        return d <= _LIMITED_TASK_MAX_L2 and rrf >= _LIMITED_TASK_MIN_RRF
+    if rrf > 0:
+        return d <= _LIMITED_QA_MAX_L2 and rrf >= _LIMITED_QA_MIN_RRF
+    return d <= USEFUL_RETRIEVAL_MAX_L2
+
+
+WEB_GROUNDED_SYSTEM_PROMPT = """You are a careful assistant. You answer ONLY using the numbered WEB snippets below.
+
+Each block is [WEB n] with Title, URL, and Snippet text.
+
+Rules:
+- Use ONLY information supported by the Snippet lines. Do not invent facts.
+- Every factual claim that comes from a snippet must include a Markdown link. The URL in parentheses must match a URL from that same [WEB n] block exactly (copy-paste; no edits).
+- Do NOT invent URLs, domains, or sources that do not appear in the WEB blocks.
+- If snippets are insufficient, say so briefly and list what is missing.
+- Keep the answer concise and avoid repeating the same sentence."""
+
+
+BLENDED_SYSTEM_PROMPT = f"""You answer using two evidence types that may both appear:
+1) Document passages under [SOURCE n] — Text: lines only.
+2) Web snippets under [WEB n] — Snippet: lines only.
+
+Rules:
+- Prefer SOURCE passages for anything covered in your documents; do not duplicate the same fact from WEB when SOURCE already states it.
+- Use WEB snippets only for time-sensitive or clearly external facts not in SOURCE, each as [title](url) with the EXACT URL from that WEB block.
+- Do not invent [SOURCE n] or [WEB n] labels; only use numbers that appear.
+- Cite [SOURCE n] for document claims; keep web claims clearly separate (you may label with "Web:" for one sentence if helpful).
+- If document evidence is insufficient for part of the question, say so and rely on WEB only for that part if available.
+- If you cannot answer from either, say so briefly (you may use wording like: {UNKNOWN_PHRASE} for the document-only portion)."""
+
+
+def build_web_grounded_messages(query: str, web_block: str) -> list[SystemMessage | HumanMessage]:
+    user_body = (
+        f"WEB SNIPPETS:\n{web_block}\n\nQUESTION:\n{query.strip()}\n\n"
+        "Answer using only the snippets. Link every web-sourced claim."
+    )
+    return [SystemMessage(content=WEB_GROUNDED_SYSTEM_PROMPT), HumanMessage(content=user_body)]
+
+
+def build_blended_messages(query: str, doc_block: str, web_block: str) -> list[SystemMessage | HumanMessage]:
+    user_body = (
+        f"DOCUMENT CONTEXT:\n{doc_block}\n\n---\n\nWEB SNIPPETS:\n{web_block}\n\n"
+        f"QUESTION:\n{query.strip()}\n\n"
+        "Follow the system instructions for citing SOURCE and WEB evidence."
+    )
+    return [SystemMessage(content=BLENDED_SYSTEM_PROMPT), HumanMessage(content=user_body)]
+
+
+def generate_web_grounded_answer(
+    query: str,
+    web_context_block: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+) -> str:
+    if not query.strip():
+        raise ValueError("Query must be non-empty.")
+    if not web_context_block.strip() or "No web results" in web_context_block:
+        return "No web results were available for this query. Try rephrasing or check your connection."
+    model = create_chat_llm(model=chat_model, temperature=0.2, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
+    messages = build_web_grounded_messages(query, web_context_block)
+    response = model.invoke(messages)
+    return _coerce_text_content(response.content).strip() or "No answer generated."
+
+
+def generate_blended_answer(
+    query: str,
+    doc_chunks: list[RetrievedChunk],
+    web_context_block: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+) -> GroundedAnswer:
+    if not query.strip():
+        raise ValueError("Query must be non-empty.")
+    doc_block = format_context_for_prompt(doc_chunks)
+    model = create_chat_llm(model=chat_model, temperature=0.0, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
+    messages = build_blended_messages(query, doc_block, web_context_block)
+    response = model.invoke(messages)
+    answer = _coerce_text_content(response.content).strip() or UNKNOWN_PHRASE
+    sources = chunks_to_source_refs(doc_chunks)
+    fixed, warn = validate_grounded_answer(answer, doc_chunks, unknown_phrase=UNKNOWN_PHRASE)
+    wfixed, wwarn = validate_web_markdown_links(fixed, _urls_from_web_context_block(web_context_block))
+    return GroundedAnswer(
+        answer=wfixed,
+        sources=sources,
+        validation_warning=merge_notes(warn, wwarn),
+    )
+
+
+def stream_grounded_answer_tokens(
+    query: str,
+    retrieved_chunks: list[RetrievedChunk],
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+) -> Iterator[str]:
+    """Yield text tokens for Streamlit ``st.write_stream`` (document-grounded only)."""
+    if not retrieved_chunks:
+        yield "No passages retrieved."
+        return
+    context_block = format_context_for_prompt(retrieved_chunks)
+    messages = build_grounded_messages(query, context_block)
+    model = create_chat_llm(
+        model=chat_model,
+        temperature=0.0,
+        max_tokens=_GROUNDED_ANSWER_MAX_TOKENS,
+    )
+    yield from _yield_llm_stream(model, messages)
+
+
+def stream_general_answer_tokens(
+    query: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+    temperature: float = 0.35,
+) -> Iterator[str]:
+    if not query.strip():
+        yield ""
+        return
+    model = create_chat_llm(
+        model=chat_model,
+        temperature=temperature,
+        max_tokens=_GENERAL_ANSWER_MAX_TOKENS,
+    )
+    messages = [
+        SystemMessage(content=GENERAL_ASSISTANT_PROMPT),
+        HumanMessage(content=query.strip()),
+    ]
+    yield from _yield_llm_stream(model, messages)
+
+
+def stream_web_grounded_answer_tokens(
+    query: str,
+    web_context_block: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+) -> Iterator[str]:
+    if not query.strip():
+        yield ""
+        return
+    if not web_context_block.strip() or "No web results" in web_context_block:
+        yield "No web results were available for this query. Try rephrasing or check your connection."
+        return
+    model = create_chat_llm(model=chat_model, temperature=0.2, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
+    messages = build_web_grounded_messages(query, web_context_block)
+    yield from _yield_llm_stream(model, messages)
+
+
+def stream_blended_answer_tokens(
+    query: str,
+    doc_chunks: list[RetrievedChunk],
+    web_context_block: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+) -> Iterator[str]:
+    if not query.strip():
+        yield ""
+        return
+    doc_block = format_context_for_prompt(doc_chunks)
+    model = create_chat_llm(model=chat_model, temperature=0.0, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
+    messages = build_blended_messages(query, doc_block, web_context_block)
+    yield from _yield_llm_stream(model, messages)
+
+
 def generate_grounded_answer(
     query: str,
     retrieved_chunks: list[RetrievedChunk],
@@ -365,8 +606,8 @@ def generate_grounded_answer(
 
     if not answer:
         answer = UNKNOWN_PHRASE
-
-    return GroundedAnswer(answer=answer, sources=sources)
+    fixed, warn = validate_grounded_answer(answer, retrieved_chunks, unknown_phrase=UNKNOWN_PHRASE)
+    return GroundedAnswer(answer=fixed, sources=sources, validation_warning=warn)
 
 
 def print_grounded_result(result: GroundedAnswer, *, query: str) -> None:

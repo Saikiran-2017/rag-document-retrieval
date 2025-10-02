@@ -16,16 +16,29 @@ def debug_enabled() -> bool:
     return DEVELOPER_DEBUG_MODE or os.environ.get("KA_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
 
+def _dev_debug_bucket() -> dict[str, Any] | None:
+    """Streamlit session dict for debug merges, or None when not in a Streamlit script (e.g. FastAPI)."""
+    try:
+        return st.session_state.setdefault("_dev_debug", {})
+    except Exception:
+        return None
+
+
 def debug_begin_turn(source: str) -> None:
     if not debug_enabled():
         return
-    st.session_state["_dev_debug"] = {"turn_source": source}
+    try:
+        st.session_state["_dev_debug"] = {"turn_source": source}
+    except Exception:
+        pass
 
 
 def merge(**kwargs: Any) -> None:
     if not debug_enabled():
         return
-    d = st.session_state.setdefault("_dev_debug", {})
+    d = _dev_debug_bucket()
+    if d is None:
+        return
     for k, v in kwargs.items():
         if v is not None:
             d[k] = v

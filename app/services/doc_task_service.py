@@ -1,8 +1,7 @@
 """
 Document-centric tasks: summarize, extract, compare.
 
-Rule-based routing only (no agents). Uses the same FAISS retrieval stack as chat Q&A;
-tasks request wider k and optional source filtering for single-file summarize.
+Uses the same hybrid (BM25 + vector + RRF) + rerank + context selection pipeline as chat Q&A.
 """
 
 from __future__ import annotations
@@ -10,13 +9,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from app.llm.generator import (
-    generate_document_task_answer,
-    generate_general_answer,
-    retrieval_is_useful,
+from app.llm.generator import generate_document_task_answer
+from app.retrieval.context_selection import (
+    hybrid_pool_size,
+    rerank_hybrid_hits,
+    select_generation_context,
 )
-from app.retrieval.vector_store import RetrievedChunk, faiss_vector_count, retrieve_top_k
-from app.services import debug_service, index_service
+from app.retrieval.hybrid_retrieve import hybrid_retrieve
+from app.retrieval.vector_store import RetrievedChunk, faiss_vector_count
+from app.services import debug_service, document_health, index_service
 from app.services.message_service import (
     MSG_GROUNDED_FALLBACK_NOTE,
     MSG_LIBRARY_UNAVAILABLE,
@@ -26,9 +27,6 @@ from app.services.message_service import (
 from .chat_service import AssistantTurn, _finalize_answer, safe_general_answer
 
 DocTask = Literal["summarize", "extract", "compare"]
-
-# Slightly relaxed gate for extract/compare when user phrasing is broad.
-_RELAXED_RETRIEVAL_L2 = 1.38
 
 
 def _source_name(chunk: RetrievedChunk) -> str:
@@ -54,17 +52,27 @@ def _dedupe_preserve_order(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]
     return out
 
 
-def _retrieve_broad(
+def _hybrid_ranked(
     store: Any,
     query: str,
     *,
-    k: int,
+    top_k: int,
+    faiss_folder: Path,
 ) -> list[RetrievedChunk]:
     nvec = faiss_vector_count(store)
     if nvec == 0:
         return []
-    kk = max(1, min(int(k), nvec))
-    return retrieve_top_k(store, query, k=kk)
+    q = (query or "").strip() or "document"
+    kp = hybrid_pool_size(nvec, top_k)
+    pool = hybrid_retrieve(
+        store,
+        q,
+        k_final=min(nvec, kp),
+        k_vector=min(28, nvec),
+        k_bm25=min(28, nvec),
+    )
+    ranked = rerank_hybrid_hits(pool)
+    return document_health.filter_trusted_retrieval_hits(faiss_folder, ranked)
 
 
 def _hits_for_summarize(
@@ -73,36 +81,39 @@ def _hits_for_summarize(
     *,
     top_k: int,
     summarize_scope: str,
-) -> tuple[list[RetrievedChunk], str | None]:
+    faiss_folder: Path,
+) -> tuple[list[RetrievedChunk], list[RetrievedChunk], str | None]:
     """
-    Retrieve chunks for summarization. If summarize_scope is a filename, bias toward that file.
-    Returns (hits, optional assistant_note).
+    Returns (context_hits for LLM, ranked_full for debug/gating, optional note).
+
+    ``ranked_full`` is the reranked hybrid list before file filter / context trim.
     """
     nvec = faiss_vector_count(store)
-    k_target = min(nvec, max(10, int(top_k) * 2))
     base_q = (user_query or "").strip() or "main themes key points sections overview"
-
-    hits = _retrieve_broad(store, base_q, k=k_target)
+    ranked = _hybrid_ranked(store, base_q, top_k=top_k, faiss_folder=faiss_folder)
     note: str | None = None
 
     scope = (summarize_scope or "all").strip().lower()
     if scope and scope != "all":
-        filtered = _filter_by_file(hits, summarize_scope)
-        if len(filtered) < max(3, min(5, k_target // 2)):
-            hits2 = _retrieve_broad(store, f"content from {summarize_scope}", k=min(nvec, k_target * 2))
-            merged = _dedupe_preserve_order(filtered + hits2)
-            filtered = _filter_by_file(merged, summarize_scope)[:k_target]
+        filtered = _filter_by_file(ranked, summarize_scope)
+        if len(filtered) < max(3, min(5, top_k)):
+            ranked2 = _hybrid_ranked(
+                store, f"content sections text from {summarize_scope}", top_k=top_k, faiss_folder=faiss_folder
+            )
+            merged = _dedupe_preserve_order(filtered + _filter_by_file(ranked2, summarize_scope))
+            filtered = merged
         if not filtered:
-            return [], "No passages from that file were found after sync. Try another file or summarize all documents."
-        hits = filtered[:k_target]
-        if hits and float(hits[0].distance) > 1.45:
-            note = "Summary uses retrieved excerpts from that file; ask a follow-up to go deeper."
+            return [], ranked, "No passages from that file were found after sync. Try another file or summarize all documents."
+        ranked = filtered
+        if ranked and float(ranked[0].distance) > 1.38:
+            note = "Summary uses retrieved excerpts from that file; coverage may be partial."
 
     if not scope or scope == "all":
-        if hits and float(hits[0].distance) > 1.45:
+        if ranked and float(ranked[0].distance) > 1.38:
             note = "Summary is based on retrieved excerpts across your library; coverage may be partial."
 
-    return hits, note
+    hits = select_generation_context(ranked, mode="summarize", top_k=top_k, nvec=nvec)
+    return hits, ranked, note
 
 
 def _hits_for_extract(
@@ -110,11 +121,13 @@ def _hits_for_extract(
     user_query: str,
     *,
     top_k: int,
-) -> list[RetrievedChunk]:
+    faiss_folder: Path,
+) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
     nvec = faiss_vector_count(store)
-    k_target = min(nvec, max(6, int(top_k)))
     q = user_query.strip() or "deadlines action items requirements decisions entities"
-    return _retrieve_broad(store, q, k=k_target)
+    ranked = _hybrid_ranked(store, q, top_k=top_k, faiss_folder=faiss_folder)
+    hits = select_generation_context(ranked, mode="extract", top_k=top_k, nvec=nvec)
+    return hits, ranked
 
 
 def _hits_for_compare(
@@ -122,11 +135,13 @@ def _hits_for_compare(
     user_query: str,
     *,
     top_k: int,
-) -> list[RetrievedChunk]:
+    faiss_folder: Path,
+) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
     nvec = faiss_vector_count(store)
-    k_target = min(nvec, max(10, int(top_k) * 2))
     q = user_query.strip() or "differences similarities changes across documents"
-    return _retrieve_broad(store, q, k=k_target)
+    ranked = _hybrid_ranked(store, q, top_k=top_k, faiss_folder=faiss_folder)
+    hits = select_generation_context(ranked, mode="compare", top_k=top_k, nvec=nvec)
+    return hits, ranked
 
 
 def _distinct_sources(hits: list[RetrievedChunk]) -> set[str]:
@@ -150,7 +165,7 @@ def run_document_task(
     Preconditions and retrieval quality are handled explicitly; failures fall back to
     a calm general reply when appropriate (same resilience pattern as chat_service).
     """
-    if not index_service.library_fingerprint(raw_dir):
+    if not index_service.list_raw_files(raw_dir):
         text, gerr = safe_general_answer(query)
         return _finalize_answer(
             AssistantTurn(
@@ -234,14 +249,25 @@ def run_document_task(
         )
 
     assistant_note: str | None = None
+    ranked_for_gate: list[RetrievedChunk] = []
     try:
         if task == "summarize":
-            hits, note = _hits_for_summarize(store, query, top_k=top_k, summarize_scope=summarize_scope)
+            hits, ranked_for_gate, note = _hits_for_summarize(
+                store,
+                query,
+                top_k=top_k,
+                summarize_scope=summarize_scope,
+                faiss_folder=faiss_folder,
+            )
             assistant_note = note
         elif task == "extract":
-            hits = _hits_for_extract(store, query, top_k=top_k)
+            hits, ranked_for_gate = _hits_for_extract(
+                store, query, top_k=top_k, faiss_folder=faiss_folder
+            )
         else:
-            hits = _hits_for_compare(store, query, top_k=top_k)
+            hits, ranked_for_gate = _hits_for_compare(
+                store, query, top_k=top_k, faiss_folder=faiss_folder
+            )
     except Exception as exc:
         if debug_service.debug_enabled():
             debug_service.merge(
@@ -274,33 +300,35 @@ def run_document_task(
             exception_summary=gerr,
         )
 
-    useful = retrieval_is_useful(hits)
-    if not useful and task in ("extract", "compare"):
-        useful = retrieval_is_useful(hits, max_l2_distance=_RELAXED_RETRIEVAL_L2)
-    if not useful and task == "extract":
+    if not hits and task in ("extract", "compare"):
         text, gerr = safe_general_answer(query)
         return _finalize_answer(
             AssistantTurn(
                 mode="general",
                 text=text,
-                assistant_note="No strong matches in your documents for that request. Rephrase or sync updated files.",
+                assistant_note="No document excerpts were selected for this task. Try Sync or a different question.",
             ),
-            routing="task_extract_weak",
+            routing=f"task_{task}_no_context",
             document_task=task,
             retrieval_ran=True,
-            retrieval_hit_count=len(hits),
+            retrieval_hit_count=0,
             fallback_to_general=True,
             exception_summary=gerr,
         )
-    if not useful and task == "compare":
+
+    useful = document_health.allow_document_grounding(
+        faiss_folder, ranked_for_gate, for_document_task=True
+    )
+    if not useful:
         text, gerr = safe_general_answer(query)
+        msg = {
+            "summarize": "Retrieval did not find strong matches for a reliable summary. Rephrase, add files, or try a narrower question.",
+            "extract": "No strong matches in your documents for that request. Rephrase or sync updated files.",
+            "compare": "Retrieval did not surface strong passages to compare. Try a more specific question.",
+        }[task]
         return _finalize_answer(
-            AssistantTurn(
-                mode="general",
-                text=text,
-                assistant_note="Retrieval did not surface strong passages to compare. Try a more specific question.",
-            ),
-            routing="task_compare_weak",
+            AssistantTurn(mode="general", text=text, assistant_note=msg),
+            routing=f"task_{task}_weak_hybrid",
             document_task=task,
             retrieval_ran=True,
             retrieval_hit_count=len(hits),
@@ -312,6 +340,13 @@ def run_document_task(
         assistant_note = merge_notes(
             assistant_note,
             "Retrieved passages mostly come from one document; comparison may be limited.",
+        )
+
+    if debug_service.debug_enabled():
+        debug_service.merge(
+            document_task=task,
+            task_context_chunk_count=len(hits),
+            task_ranked_pool_size=len(ranked_for_gate),
         )
 
     try:
@@ -335,7 +370,13 @@ def run_document_task(
         )
 
     return _finalize_answer(
-        AssistantTurn(mode="grounded", text=ga.answer, grounded=ga, hits=hits, assistant_note=assistant_note),
+        AssistantTurn(
+            mode="grounded",
+            text=ga.answer,
+            grounded=ga,
+            hits=hits,
+            assistant_note=merge_notes(assistant_note, ga.validation_warning),
+        ),
         routing=f"task_{task}",
         document_task=task,
         retrieval_ran=True,

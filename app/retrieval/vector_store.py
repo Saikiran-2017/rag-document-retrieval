@@ -76,6 +76,26 @@ def chunks_to_documents(chunks: list[TextChunk]) -> list[Document]:
     return documents
 
 
+def build_faiss_from_documents_with_embeddings(
+    documents: list[Document],
+    embedding_vectors: list[list[float]],
+    *,
+    embedder: OpenAIEmbeddings,
+) -> FAISS:
+    """
+    Build FAISS from precomputed vectors (e.g. from embedding cache).
+
+    ``documents`` and ``embedding_vectors`` must align one-to-one.
+    """
+    if len(documents) != len(embedding_vectors):
+        raise ValueError("documents and embedding_vectors length mismatch.")
+    if not documents:
+        raise ValueError("No documents to index.")
+    pairs = list(zip([d.page_content for d in documents], embedding_vectors, strict=True))
+    metadatas = [dict(d.metadata) for d in documents]
+    return FAISS.from_embeddings(pairs, embedder, metadatas=metadatas)
+
+
 def build_faiss_from_chunks(
     chunks: list[TextChunk],
     *,
@@ -200,6 +220,16 @@ class RetrievedChunk:
             page_content=self.page_content,
             metadata=dict(self.metadata),
         )
+
+
+def iter_faiss_documents(store: FAISS) -> list[Document]:
+    """All documents in the FAISS docstore (order matches internal index ids)."""
+    docs: list[Document] = []
+    for _idx, doc_id in store.index_to_docstore_id.items():
+        d = store.docstore.search(doc_id)
+        if d is not None:
+            docs.append(d)
+    return docs
 
 
 def retrieve_top_k(

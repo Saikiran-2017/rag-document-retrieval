@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "description": "Phase 15 end-to-end reliability scenarios: preconditions, user message, expected routing/mode, and notes. Re-run with scripts/run_phase15_reliability.py and manual QA.",
+  "scenarios": [
+    {
+      "id": "e2e-01",
+      "name": "Empty message",
+      "preconditions": "Any library state",
+      "user_message": "   ",
+      "expected_routing": "error_empty",
+      "expected_mode": "error",
+      "notes": "Must not call retrieval or web."
+    },
+    {
+      "id": "e2e-02",
+      "name": "No documents in library",
+      "preconditions": "Raw library folder empty; user asks a normal question",
+      "user_message": "What is machine learning?",
+      "expected_routing": "general_no_library",
+      "expected_mode": "general",
+      "notes": "General answer; no index load required for empty dir short-circuit."
+    },
+    {
+      "id": "e2e-03",
+      "name": "Sync / index failure",
+      "preconditions": "Files on disk but index rebuild fails (e.g. bad chunk settings or I/O)",
+      "user_message": "Summarize my files",
+      "expected_routing": "general_sync_fallback",
+      "expected_mode": "general",
+      "notes": "Assistant note should mention library unavailable."
+    },
+    {
+      "id": "e2e-04",
+      "name": "Valid file → ready → grounded Q&A",
+      "preconditions": "Upload clear TXT/PDF with unique phrase; Sync; manifest ready",
+      "user_message": "Quote the exact phrase about <topic> from my document.",
+      "expected_routing": "grounded",
+      "expected_mode": "grounded",
+      "notes": "Answer should cite [SOURCE n]; excerpts expander populated."
+    },
+    {
+      "id": "e2e-05",
+      "name": "Weak / limited document health",
+      "preconditions": "File in ready_limited (probe or count mismatch)",
+      "user_message": "What does the contract say about termination?",
+      "expected_routing": ["general_weak_no_web", "web_weak_docs", "grounded"],
+      "expected_mode": ["general", "web", "grounded"],
+      "notes": "Either stricter grounding, web if strong, or general; must not silently trust limited docs."
+    },
+    {
+      "id": "e2e-06",
+      "name": "Failed parse file does not poison answers",
+      "preconditions": "One good file + one failed file in manifest",
+      "user_message": "What is stated in the good document only?",
+      "expected_routing": "grounded",
+      "expected_mode": "grounded",
+      "notes": "Failed file excluded from retrieval pool; answer aligns with good file."
+    },
+    {
+      "id": "e2e-07",
+      "name": "Strong docs, no time-sensitive cue → doc only",
+      "preconditions": "Synced library with strong retrieval",
+      "user_message": "List the main sections from my uploaded policy.",
+      "expected_routing": "grounded",
+      "expected_mode": "grounded",
+      "notes": "No blend without time-sensitive pattern."
+    },
+    {
+      "id": "e2e-08",
+      "name": "Strong docs + strong web + time-sensitive → blended",
+      "preconditions": "Synced library; WEB_SEARCH_ENABLED=1; web returns strong snippets",
+      "user_message": "What are the latest 2026 regulatory changes affecting my policy in the document?",
+      "expected_routing": "blended",
+      "expected_mode": "blended",
+      "notes": "Both SOURCE and WEB expanders; web links only from retrieved set."
+    },
+    {
+      "id": "e2e-09",
+      "name": "Weak docs + strong web → web",
+      "preconditions": "Irrelevant or empty index vs question; web strong",
+      "user_message": "What is the current weather in Paris today?",
+      "expected_routing": ["web_weak_docs", "general_weak_no_web"],
+      "expected_mode": ["web", "general"],
+      "notes": "If web weak, falls back to general_weak_no_web or general_web_thin."
+    },
+    {
+      "id": "e2e-10",
+      "name": "Weak docs + weak web → general",
+      "preconditions": "Obscure query; web thin",
+      "user_message": "asdfgh jklqwerty nonsense zztop 99999",
+      "expected_routing": ["general_weak_no_web", "general_web_thin"],
+      "expected_mode": "general",
+      "notes": "No fake web citations; thin web uses MSG_WEB_RESULTS_THIN when applicable."
+    },
+    {
+      "id": "e2e-11",
+      "name": "No fake [SOURCE] citations",
+      "preconditions": "Grounded turn",
+      "user_message": "Answer using only my file.",
+      "expected_routing": "grounded",
+      "expected_mode": "grounded",
+      "notes": "Invalid [SOURCE n] triggers withheld message and validation log when KA_RELIABILITY_LOG=1."
+    },
+    {
+      "id": "e2e-12",
+      "name": "Fast path (no retrieval)",
+      "preconditions": "Short non-doc query, files may exist",
+      "user_message": "Hi",
+      "expected_routing": "general_fastpath",
+      "expected_mode": "general",
+      "notes": "wants_no_retrieval_fastpath; no FAISS query."
+    },
+    {
+      "id": "e2e-13",
+      "name": "Streaming completes and persists",
+      "preconditions": "KA_NO_STREAM unset; send message",
+      "user_message": "One sentence about cats.",
+      "expected_routing": ["general_fastpath", "grounded", "general_no_library"],
+      "expected_mode": "general",
+      "notes": "After stream, message stored once with full text; no duplicate assistant rows."
+    },
+    {
+      "id": "e2e-14",
+      "name": "Chat switch preserves histories",
+      "preconditions": "Two chats A and B with different messages",
+      "user_message": "(manual) switch A → B → A",
+      "expected_routing": "n/a",
+      "expected_mode": "n/a",
+      "notes": "SQLite load_messages order stable; no cross-session bleed."
+    },
+    {
+      "id": "e2e-15",
+      "name": "Large document sync",
+      "preconditions": "Multi-page PDF within reasonable size",
+      "user_message": "What is on page 1?",
+      "expected_routing": ["grounded", "general_weak_no_web"],
+      "expected_mode": ["grounded", "general"],
+      "notes": "Index completes or clear failed state; no silent hang."
+    },
+    {
+      "id": "e2e-16",
+      "name": "Repeated identical query",
+      "preconditions": "Same question twice in a row",
+      "user_message": "Define RAG.",
+      "expected_routing": ["grounded", "general_no_library", "general_fastpath"],
+      "expected_mode": ["grounded", "general"],
+      "notes": "Deterministic routing class; second answer consistent with first."
+    },
+    {
+      "id": "e2e-17",
+      "name": "Document task summarize",
+      "preconditions": "task_mode=summarize; synced docs",
+      "user_message": "Summarize the key points.",
+      "expected_routing": [
+        "task_summarize",
+        "task_summarize_weak_hybrid",
+        "task_summarize_no_hits",
+        "task_summarize_sync_fallback",
+        "task_summarize_no_library"
+      ],
+      "expected_mode": ["grounded", "general"],
+      "notes": "Success ends with routing task_summarize; failures use task_summarize_*."
+    },
+    {
+      "id": "e2e-18",
+      "name": "Compare needs two files",
+      "preconditions": "Only one file",
+      "user_message": "Compare the two contracts.",
+      "expected_routing": "task_compare_need_two",
+      "expected_mode": "general",
+      "notes": "Clear assistant note."
+    },
+    {
+      "id": "e2e-19",
+      "name": "Web search disabled",
+      "preconditions": "WEB_SEARCH_ENABLED=0",
+      "user_message": "Latest news on AI",
+      "expected_routing": ["general_weak_no_web", "grounded"],
+      "expected_mode": ["general", "grounded"],
+      "notes": "No web mode; doc or general only."
+    },
+    {
+      "id": "e2e-20",
+      "name": "Perf: retrieval phase bounded",
+      "preconditions": "KA_DEBUG=1 or KA_PERF_LOG=1",
+      "user_message": "Question hitting retrieval",
+      "expected_routing": "grounded",
+      "expected_mode": "grounded",
+      "notes": "latency_ms_retrieval present in debug or ka_perf line; TTFT acceptable."
+    },
+    {
+      "id": "e2e-21",
+      "name": "Reliability JSON log line",
+      "preconditions": "KA_RELIABILITY_LOG=1",
+      "user_message": "Any",
+      "expected_routing": "any",
+      "expected_mode": "any",
+      "notes": "Each turn emits reliability_turn JSON with routing and weak_retrieval flags."
+    },
+    {
+      "id": "e2e-22",
+      "name": "Unhandled exception → safe general",
+      "preconditions": "Rare internal error",
+      "user_message": "Normal question",
+      "expected_routing": "general_unhandled_fallback",
+      "expected_mode": "general",
+      "notes": "answer_user_query outer try/except; user sees general reply."
+    }
+  ]
+}

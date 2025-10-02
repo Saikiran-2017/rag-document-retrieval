@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ka-bg: #fafaf9;
+  --ka-surface: #ffffff;
+  --background: #fafaf9;
+  --foreground: #1c1917;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--ka-bg);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}

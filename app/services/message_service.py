@@ -7,14 +7,13 @@ from pathlib import Path
 
 APP_NAME = "Knowledge Assistant"
 # First-screen value prop (also used where TAGLINE was referenced).
-EMPTY_STATE_VALUE_PROP = "Ask questions in chat. When your documents apply, answers can include sources and short excerpts."
+EMPTY_STATE_VALUE_PROP = "Chat normally—when your library applies, answers cite your files."
 TAGLINE = EMPTY_STATE_VALUE_PROP
-SIDEBAR_CAPTION = "Documents, sync, chat."
+SIDEBAR_CAPTION = "Upload, sync, ask."
 
 # Empty-state: short trust/context line (HTML escaped where injected).
 HERO_BEST_FOR = (
-    "Strongest with a known set of files you care about. General questions work without uploads. "
-    "Use alongside your usual AI tools—not a full replacement for every task."
+    "Best for a focused set of files. Works without uploads. Complements your other AI tools."
 )
 
 # Sidebar positioning (modest, factual; no product names as endorsements—examples only where needed).
@@ -42,13 +41,13 @@ SIDEBAR_TOP_K_MAX = 12
 DEFAULT_TOP_K = 3
 
 STARTER_QUESTIONS = [
-    "Summarize the main points I should know.",
-    "What themes show up in my documents?",
-    "What are three clear writing tips?",
+    "Summarize the key points I should remember.",
+    "What themes appear in my documents?",
+    "Give me three concise writing tips.",
 ]
 
 # User-facing copy only (no indexing / embedding / vector jargon).
-MSG_LIBRARY_UPDATED = "Library updated."
+MSG_LIBRARY_UPDATED = "Library ready."
 MSG_PREPARE_DOCS_FAILED = "Couldn't prepare documents. Please try again."
 MSG_PREPARE_SETTINGS_HINT = "Couldn't prepare documents. Adjust Preferences, then try again."
 MSG_READ_FILES_FAILED = "Couldn't read text from those files. Try another file or check they aren't empty."
@@ -59,7 +58,26 @@ MSG_UPLOAD_FAILED = "We couldn't save those files. Your question is answered bel
 MSG_DOCS_PREP_FAILED = "We couldn't finish preparing your documents. Your question is answered below without using those files."
 MSG_LIBRARY_UNAVAILABLE = "Your library isn't available for this reply, so this answer is general."
 MSG_GROUNDED_FALLBACK_NOTE = "Your documents couldn't be used for this reply, so this answer is general."
+MSG_WEB_RESULTS_THIN = (
+    "Web search didn't return solid enough snippets to cite safely, so this answer is general."
+)
 MSG_SERVICE_UNAVAILABLE = "Something went wrong on our side. Please try again in a moment."
+
+# Document library health (plain language; avoid embedding / vector jargon in UI).
+DOC_HEALTH_COULD_NOT_READ_FILE = (
+    "We couldn't read usable text from this file. Try PDF, Word, or plain text, or re-export the file."
+)
+DOC_HEALTH_NO_TEXT_EXTRACTED = (
+    "No text could be extracted. The file may be image-only or empty—try a text-based export if you can."
+)
+DOC_HEALTH_INDEX_SECTIONS_MISMATCH = (
+    "This file is saved, but search didn't match the text we extracted. Try Sync again."
+)
+DOC_HEALTH_SEARCH_PARTIALLY_RELIABLE = (
+    "Search is only partially reliable for your library right now, so answers may miss some documents."
+)
+DOC_HEALTH_INDEX_INTERRUPTED = "We couldn't finish indexing your files. Try Sync again."
+DOC_HEALTH_GENERIC_FAILURE = "Something went wrong while preparing this file. Try Sync again or use another file."
 
 def merge_notes(*parts: str | None) -> str | None:
     bits = [p.strip() for p in parts if p and str(p).strip()]

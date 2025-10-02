@@ -46,6 +46,22 @@ def _validate_split_params(chunk_size: int, chunk_overlap: int) -> None:
         raise ValueError("chunk_overlap must be smaller than chunk_size (otherwise chunks repeat infinitely).")
 
 
+# Prefer paragraph / line / sentence boundaries before hard cuts (reduces mid-sentence splits).
+_CHUNK_SEPARATORS = [
+    "\n\n",
+    "\n",
+    ". ",
+    ".\n",
+    "? ",
+    "! ",
+    "; ",
+    ": ",
+    ", ",
+    " ",
+    "",
+]
+
+
 def _make_splitter(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
     """RecursiveCharacterTextSplitter applies overlap between consecutive chunks internally."""
     return RecursiveCharacterTextSplitter(
@@ -53,6 +69,7 @@ def _make_splitter(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTex
         chunk_overlap=chunk_overlap,
         length_function=len,
         is_separator_regex=False,
+        separators=_CHUNK_SEPARATORS,
     )
 
 

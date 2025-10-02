@@ -1,0 +1,95 @@
+{
+  "description": "Phase 12 retrieval/grounding smoke questions. Point raw_dir at your corpus; adjust expected_keywords per your files.",
+  "questions": [
+    {
+      "id": "q01",
+      "query": "What is this document mainly about?",
+      "expect_doc_grounded": true,
+      "expected_keywords": ["document", "text", "section", "page", "content"]
+    },
+    {
+      "id": "q02",
+      "query": "List three factual claims that appear explicitly in the uploaded text.",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q03",
+      "query": "What headings or section titles are mentioned?",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q04",
+      "query": "Quote or paraphrase one sentence that defines a key term.",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q05",
+      "query": "Summarize the introduction in two sentences using only the provided excerpts.",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q06",
+      "query": "What dates, numbers, or percentages appear in the documents?",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q07",
+      "query": "What limitations or caveats does the text state about its own content?",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q08",
+      "query": "Compare how two different sections describe the same topic, if both appear.",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q09",
+      "query": "Extract any bullet lists or enumerated steps mentioned.",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q10",
+      "query": "What is the full name of the author or organization, if stated?",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q11",
+      "query": "randomstringxyz123 unlikelytoken retrieval noise probe",
+      "expect_doc_grounded": false,
+      "expected_keywords": []
+    },
+    {
+      "id": "q12",
+      "query": "main themes overview",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q13",
+      "query": "deadline requirements action items",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q14",
+      "query": "differences between sections or versions described in the text",
+      "expect_doc_grounded": true,
+      "expected_keywords": []
+    },
+    {
+      "id": "q15",
+      "query": "What does the document say about chunking or embeddings or retrieval, if anything?",
+      "expect_doc_grounded": true,
+      "expected_keywords": ["chunk", "embed", "retriev", "vector", "index", "text"]
+    }
+  ]
+}
