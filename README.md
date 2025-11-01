@@ -165,7 +165,7 @@ You save a two-page internal FAQ as a PDF into `data/raw/`, build the index, the
 
 Retrieved chunks are injected into the prompt as labeled blocks: **[SOURCE 1]**, **[SOURCE 2]**, and so on. Each block includes metadata lines (chunk id, file name, path, page) and a **Text:** section that is the only part the model is told to treat as evidence.
 
-The UI lists the same chunks as structured **sources** (aligned with those numbers). The model is asked to cite **[SOURCE *N*]** when it uses a passage and to give a fixed *cannot answer* response if the text does not support an answer. That reduces—but does not mathematically guarantee—hallucinations; production systems still need review, evaluation, and monitoring.
+The UI lists the same chunks as structured **sources** (aligned with those numbers). The model is asked to cite **[SOURCE *N*]** when it uses a passage and to give a fixed *cannot answer* response if the text does not support an answer. That reduces hallucinations but is not mathematically guaranteed; production systems still need review, evaluation, and monitoring.
 
 ---
 
@@ -199,7 +199,7 @@ Replace these with your own images after you capture the UI:
 - **Why the same embedding model for index and query:** Vector dimension and geometry must match; mixing models breaks retrieval.  
 - **What top-*k* trades off:** Higher *k* adds context but also noise and cost; lower *k* can miss relevant passages.  
 - **How you explain grounding:** The LLM only sees retrieved text in numbered blocks and is instructed not to use outside knowledge; citations tie claims back to chunks you can audit.  
-- **Honest limitation:** Prompting improves faithfulness but is not a formal guarantee—evals and human review still matter.  
+- **Honest limitation:** Prompting improves faithfulness but is not a formal guarantee; evals and human review still matter.  
 
 ---
 

@@ -1,4 +1,4 @@
-# RAG document retrieval — Phase 1 baseline (pin versions when you freeze the project)
+# RAG document retrieval - Phase 1 baseline (pin versions when you freeze the project)
 python-dotenv>=1.0.1
 streamlit>=1.39.0
 openai>=1.54.0

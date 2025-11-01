@@ -2,7 +2,7 @@
 Split ingested documents into overlapping text chunks for embedding and retrieval.
 
 Uses LangChain's RecursiveCharacterTextSplitter so splits prefer natural boundaries
-(paragraphs, sentences) before hard character cuts—easy to justify in interviews.
+(paragraphs, sentences) before hard character cuts; easy to justify in interviews.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def chunk_ingested_documents(
     documents
         Output from :func:`app.ingestion.loader.load_file` or ``load_raw_directory``.
     chunk_size
-        Target maximum characters per chunk (not tokens—embedding models have their own limits).
+        Target maximum characters per chunk (not tokens; embedding models have their own limits).
     chunk_overlap
         Characters repeated at chunk boundaries; implemented by LangChain, not duplicated here.
 

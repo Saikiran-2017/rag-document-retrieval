@@ -164,7 +164,7 @@ def generate_grounded_answer(
     If ``retrieved_chunks`` is empty, skips the LLM and returns a safe fixed message.
 
     ``sources`` lists every chunk in the prompt; ``source_number`` matches [SOURCE N].
-    Grounding reduces hallucination but is not mathematically guaranteed—always review for production.
+    Grounding reduces hallucination but is not mathematically guaranteed; always review for production.
     """
     if not query.strip():
         raise ValueError("Query must be non-empty.")

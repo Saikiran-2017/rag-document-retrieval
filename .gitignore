@@ -36,7 +36,7 @@ Thumbs.db
 # Streamlit
 .streamlit/secrets.toml
 
-# Local data (uploads and indexes — adjust if you want to track small samples)
+# Local data (uploads and indexes - adjust if you want to track small samples)
 data/raw/*
 !data/raw/.gitkeep
 !data/raw/sample_phase2.txt
