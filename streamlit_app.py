@@ -1,5 +1,5 @@
 """
-RAG Document Retrieval — Streamlit UI.
+RAG Document Retrieval - Streamlit UI
 
 Run from project root:
     streamlit run streamlit_app.py
@@ -50,10 +50,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("RAG-Based Document Retrieval System")
+st.title("RAG Document Retrieval System")
 st.caption(
-    "Upload documents, build a local vector index, then ask questions. "
-    "Answers are grounded in retrieved passages with source citations."
+    "Upload documents, build a local vector index, then ask questions with grounded answers."
 )
 
 raw_dir = get_default_raw_dir()
@@ -94,9 +93,13 @@ if st.button("Save uploaded files to data/raw", type="primary"):
 
 existing = _list_raw_files(raw_dir)
 if existing:
-    st.caption(f"Files currently in library: {len(existing)} — " + ", ".join(p.name for p in existing[:8]) + (" ..." if len(existing) > 8 else ""))
+    display_names = ", ".join(p.name for p in existing[:8])
+    count_msg = f"Files in library: {len(existing)}"
+    if len(existing) > 8:
+        display_names += " ..."
+    st.caption(f"{count_msg}: {display_names}")
 else:
-    st.info("No supported files in `data/raw/` yet. Upload and save, or add files manually.")
+    st.info("No supported files in data/raw/ yet. Upload and save files to get started.")
 
 # --- 2. Index ---
 st.subheader("2. Vector index")
@@ -180,45 +183,21 @@ if st.session_state.get("rag_result") is not None:
 
     st.markdown("### Sources")
     if not res.sources:
-        st.caption("No sources in context (empty retrieval or index issue).")
+        st.caption("No sources found in context.")
     else:
         for src in res.sources:
-            with st.expander(f"[SOURCE {src.source_number}] — {src.source_name or '(unknown file)'}", expanded=False):
-                st.write(f"**chunk_id:** `{src.chunk_id}`")
-                st.write(f"**page:** {src.page_label}")
+            with st.expander(f"Source {src.source_number}: {src.source_name or 'Unknown'}", expanded=False):
+                st.write(f"**Chunk ID:** `{src.chunk_id}`")
+                st.write(f"**Page:** {src.page_label}")
                 if src.file_path:
-                    st.caption(f"path: `{src.file_path}`")
+                    st.caption(f"File: {src.file_path}")
 
-        st.markdown("#### Retrieved chunk previews (FAISS L2 distance — lower is closer)")
+        st.markdown("#### Retrieved Chunks")
         if not hits_done:
-            st.caption("No retrieval rows stored for this run.")
+            st.caption("No retrieval data available.")
         else:
             for h in hits_done:
-                label = h.metadata.get("chunk_id", f"rank_{h.rank}")
-                prev = h.page_content[:400] + ("..." if len(h.page_content) > 400 else "")
-                st.markdown(f"**{label}** · distance `{h.distance:.4f}`")
+                label = h.metadata.get("chunk_id", f"Rank {h.rank}")
+                prev = h.page_content[:300] + ("..." if len(h.page_content) > 300 else "")
+                st.markdown(f"**{label}** (Distance: {h.distance:.4f})")
                 st.text(prev)
-
-# Enhanced 2024-08-15
-
-# Enhanced 2024-09-09
-
-# Enhanced 2024-10-03
-
-# Enhanced 2024-10-23
-
-# Enhanced 2024-08-15
-
-# Enhanced 2024-09-09
-
-# Enhanced 2025-08-15
-
-# Enhanced 2025-09-09
-
-# Enhanced 2025-10-03
-
-# Enhanced 2025-10-23
-
-# Enhanced 2025-08-15
-
-# Enhanced 2025-09-09
