@@ -28,13 +28,13 @@ The codebase is split into small modules (ingestion, chunking, vector store, LLM
 
 The pipeline runs in this order:
 
-1. **Ingestion** — Files in `data/raw/` are read; text is extracted and normalized into structured segments (e.g. one record per non-empty PDF page or one per TXT/DOCX file).  
-2. **Chunking** — Each segment is split into smaller overlapping pieces. Every chunk keeps ingestion metadata plus `chunk_id`, `chunk_index`, and `total_chunks` for that segment.  
-3. **Embedding** — Chunk text is sent to the OpenAI embeddings API; vectors are built with the same settings used later for queries.  
-4. **FAISS** — Vectors and LangChain `Document` objects (text + metadata) are stored in a FAISS index and written to disk (`*.faiss` + `*.pkl`).  
-5. **Retrieval** — The user question is embedded; FAISS returns the top-*k* nearest chunks and their metadata and distances.  
-6. **LLM** — Retrieved chunks are formatted as numbered **[SOURCE 1], [SOURCE 2], …** blocks; the chat model answers using only that text and is instructed to cite sources or say it cannot answer from the documents.  
-7. **UI** — Streamlit orchestrates upload, index build, question submission, and display of the answer, source list, and optional chunk previews.  
+1. **Ingestion** - Files in `data/raw/` are read; text is extracted and normalized into structured segments (e.g. one record per non-empty PDF page or one per TXT/DOCX file).  
+2. **Chunking** - Each segment is split into smaller overlapping pieces. Every chunk keeps ingestion metadata plus `chunk_id`, `chunk_index`, and `total_chunks` for that segment.  
+3. **Embedding** - Chunk text is sent to the OpenAI embeddings API; vectors are built with the same settings used later for queries.  
+4. **FAISS** - Vectors and LangChain `Document` objects (text + metadata) are stored in a FAISS index and written to disk (`*.faiss` + `*.pkl`).  
+5. **Retrieval** - The user question is embedded; FAISS returns the top-*k* nearest chunks and their metadata and distances.  
+6. **LLM** - Retrieved chunks are formatted as numbered **[SOURCE 1], [SOURCE 2], …** blocks; the chat model answers using only that text and is instructed to cite sources or say it cannot answer from the documents.  
+7. **UI** - Streamlit orchestrates upload, index build, question submission, and display of the answer, source list, and optional chunk previews.  
 
 ---
 
@@ -206,27 +206,3 @@ Replace these with your own images after you capture the UI:
 ## License
 
 Specify a license (for example MIT) when you publish the repository, or retain default copyright until you add a `LICENSE` file.
-
-- Update 2024-08-18
-
-- Update 2024-09-11
-
-- Update 2024-10-05
-
-- Update 2024-10-25
-
-- Update 2024-08-18
-
-- Update 2024-09-11
-
-- Update 2025-08-18
-
-- Update 2025-09-11
-
-- Update 2025-10-05
-
-- Update 2025-10-25
-
-- Update 2025-08-18
-
-- Update 2025-09-11
