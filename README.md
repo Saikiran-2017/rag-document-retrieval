@@ -128,4 +128,6 @@ rag-document-retrieval/
 
 ## License
 
-Add a `LICENSE` file when you make the repository public (for example MIT).
+MIT License - see [LICENSE](LICENSE) for details.
+
+Copyright (c) 2025 Sai Kiran. Free to use, modify, and distribute under the terms of the MIT License.
