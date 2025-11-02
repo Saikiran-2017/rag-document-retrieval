@@ -187,6 +187,99 @@ _GENERAL_ANSWER_MAX_TOKENS = 600
 
 # Caps grounded completion length; answers stay citation-focused.
 _GROUNDED_ANSWER_MAX_TOKENS = 1200
+_DOCUMENT_TASK_MAX_TOKENS = 1400
+
+# Document-centric tasks (summarize / extract / compare): same evidence rules as Q&A, different output shape.
+SUMMARIZE_SYSTEM_PROMPT = f"""You summarize text supplied only in [SOURCE N] blocks below. Evidence is ONLY the lines under "Text:" in each block.
+
+Output format (use Markdown):
+1. **Overview** — 2–4 sentences.
+2. **Key points** — bullet list (3–8 items when the material supports it).
+3. If the excerpts clearly do not cover the topic, say so in one short sentence (you may phrase like: {UNKNOWN_PHRASE}).
+
+Rules:
+- Cite [SOURCE N] for specific claims taken from the Text.
+- Do not invent content not supported by the Text lines."""
+
+EXTRACT_SYSTEM_PROMPT = f"""You extract structured information from text in [SOURCE N] blocks. Evidence is ONLY the lines under "Text:" in each block.
+
+The user may ask for deadlines, action items, key entities, requirements, decisions, or similar.
+
+Output format (use Markdown):
+- Use short headings (###) and bullet lists.
+- If a category has no matches, state "None found in the supplied excerpts."
+- Cite [SOURCE N] for each non-trivial item where possible.
+- If the excerpts are insufficient, say so briefly (you may phrase like: {UNKNOWN_PHRASE})."""
+
+COMPARE_SYSTEM_PROMPT = f"""You compare content across documents using only text in [SOURCE N] blocks. Evidence is ONLY the lines under "Text:" in each block.
+
+Cover what the user asked (e.g. differences, similarities, policy changes, tone) using only the supplied excerpts.
+- Prefer a short **Summary** then **Details** with bullets or a small Markdown table when it helps readability.
+- Cite [SOURCE N] for claims tied to specific passages.
+- If excerpts come from only one document or are insufficient to compare, say so clearly (you may phrase like: {UNKNOWN_PHRASE})."""
+
+
+def build_document_task_messages(
+    task: str,
+    query: str,
+    context_block: str,
+) -> list[SystemMessage | HumanMessage]:
+    """System + user messages for summarize / extract / compare (single completion, no agent loop)."""
+    prompts = {
+        "summarize": SUMMARIZE_SYSTEM_PROMPT,
+        "extract": EXTRACT_SYSTEM_PROMPT,
+        "compare": COMPARE_SYSTEM_PROMPT,
+    }
+    system = prompts.get(task)
+    if not system:
+        raise ValueError(f"Unknown document task: {task!r}")
+    user_body = (
+        f"CONTEXT:\n{context_block}\n\n"
+        f"USER REQUEST:\n{query.strip()}\n\n"
+        "Follow the system instructions. Use only the Text under each [SOURCE N]."
+    )
+    return [SystemMessage(content=system), HumanMessage(content=user_body)]
+
+
+def generate_document_task_answer(
+    task: str,
+    query: str,
+    retrieved_chunks: list[RetrievedChunk],
+    *,
+    llm: ChatOpenAI | None = None,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+    temperature: float = 0.0,
+) -> GroundedAnswer:
+    """
+    One-shot document task (summarize / extract / compare) over retrieved chunks.
+
+    Same citation numbering as grounded Q&A; empty chunks yields a safe fixed message without calling the model.
+    """
+    if task not in ("summarize", "extract", "compare"):
+        raise ValueError(f"Unknown document task: {task!r}")
+    if not query.strip():
+        raise ValueError("Query must be non-empty.")
+
+    sources = chunks_to_source_refs(retrieved_chunks)
+    if not retrieved_chunks:
+        return GroundedAnswer(
+            answer="No document excerpts were available for this task. Add and sync documents, then try again.",
+            sources=(),
+        )
+
+    context_block = format_context_for_prompt(retrieved_chunks)
+    messages = build_document_task_messages(task, query, context_block)
+    model = llm or create_chat_llm(
+        model=chat_model,
+        temperature=temperature,
+        max_tokens=_DOCUMENT_TASK_MAX_TOKENS,
+    )
+    logger.info("Calling chat model for document task %r (%s chunk(s))", task, len(retrieved_chunks))
+    response = model.invoke(messages)
+    answer = _coerce_text_content(response.content).strip()
+    if not answer:
+        answer = UNKNOWN_PHRASE
+    return GroundedAnswer(answer=answer, sources=sources)
 
 
 def generate_general_answer(

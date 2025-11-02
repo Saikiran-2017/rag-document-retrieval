@@ -3,330 +3,152 @@
 from __future__ import annotations
 
 import html
-import re
-from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import streamlit as st
 
-from app.ingestion.loader import get_default_raw_dir, load_raw_directory
-from app.llm.generator import (
-    GroundedAnswer,
-    generate_general_answer,
-    generate_grounded_answer,
-    retrieval_is_useful,
-)
-from app.retrieval.vector_store import (
-    DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_INDEX_NAME,
-    RetrievedChunk,
-    build_faiss_from_chunks,
-    create_openai_embeddings,
-    faiss_index_files_exist,
-    faiss_vector_count,
-    get_default_faiss_folder,
-    load_faiss_index,
-    retrieve_top_k,
-    save_faiss_index,
-)
-from app.utils.chunker import chunk_ingested_documents
+from app.ingestion.loader import get_default_raw_dir
+from app.retrieval.vector_store import get_default_faiss_folder
+from app.services import chat_service, debug_service, index_service, message_service, upload_service
 
-APP_NAME = "Knowledge Assistant"
-# First-screen value prop (also used where TAGLINE was referenced).
-EMPTY_STATE_VALUE_PROP = "Ask anything. Add files when you want answers from your documents."
-TAGLINE = EMPTY_STATE_VALUE_PROP
-SIDEBAR_CAPTION = "Your questions, your documents."
-SUPPORTED_EXT = {".pdf", ".docx", ".txt"}
-PREVIEW_CHARS = 300
-# Sidebar UI: max value for "Sources per answer" (retrieval top_k).
-SIDEBAR_TOP_K_MAX = 12
-# Default retrieval width (lower = faster retrieval + smaller prompts).
-DEFAULT_TOP_K = 3
+APP_NAME = message_service.APP_NAME
+EMPTY_STATE_VALUE_PROP = message_service.EMPTY_STATE_VALUE_PROP
+HERO_BEST_FOR = message_service.HERO_BEST_FOR
+SIDEBAR_CAPTION = message_service.SIDEBAR_CAPTION
+STARTER_QUESTIONS = message_service.STARTER_QUESTIONS
+WHY_THIS_WORKSPACE_MD = message_service.WHY_THIS_WORKSPACE_MD
+COMPARISON_MD = message_service.COMPARISON_MD
+DEFAULT_TOP_K = message_service.DEFAULT_TOP_K
+SIDEBAR_TOP_K_MAX = message_service.SIDEBAR_TOP_K_MAX
+MSG_LIBRARY_UPDATED = message_service.MSG_LIBRARY_UPDATED
+MSG_UPLOAD_FAILED = message_service.MSG_UPLOAD_FAILED
+MSG_DOCS_PREP_FAILED = message_service.MSG_DOCS_PREP_FAILED
 
-# If the query clearly does not ask about documents, skip FAISS load + retrieval (same UX).
-_DOC_QUERY_HINT = re.compile(
-    r"\b(document|documents|file|files|pdf|upload|uploaded|page|pages|passage|passages|"
-    r"excerpt|excerpts|cite|citation|source\b|sources\b|section|library|chunk|"
-    r"these files|my files|the text|summarize|summary|key points|themes|outline|"
-    r"extract|according to|from the|in the document)\b",
-    re.I,
-)
-
-
-def _wants_no_retrieval_fastpath(query: str) -> bool:
-    q = query.strip()
-    if len(q) < 4 or len(q) > 220:
-        return False
-    if _DOC_QUERY_HINT.search(q):
-        return False
-    return True
-
-
-@st.cache_resource(show_spinner=False)
-def _cached_openai_embeddings(model: str) -> Any:
-    return create_openai_embeddings(model=model)
-
-
-def _faiss_disk_version(folder: Path, index_name: str) -> str:
-    faiss_f = folder / f"{index_name}.faiss"
-    pkl_f = folder / f"{index_name}.pkl"
-    if not faiss_f.is_file() or not pkl_f.is_file():
-        return "missing"
-    return f"{faiss_f.stat().st_mtime_ns}-{pkl_f.stat().st_mtime_ns}"
-
-
-@st.cache_resource(show_spinner=False)
-def _cached_faiss_store(faiss_folder_str: str, index_name: str, cache_key: str) -> Any:
-    """Load FAISS from disk; cache invalidates when library fingerprint or on-disk index changes."""
-    return load_faiss_index(
-        folder_path=Path(faiss_folder_str),
-        index_name=index_name,
-        embeddings=_cached_openai_embeddings(DEFAULT_EMBEDDING_MODEL),
-    )
-
-STARTER_QUESTIONS = [
-    "Give three concise tips for clearer writing.",
-    "Summarize the key points I should know.",
-    "What themes or terms show up in my documents?",
+# Compact task mode labels (Preferences expander); values are service-layer mode keys.
+_TASK_MODE_OPTIONS: list[tuple[str, str]] = [
+    ("auto", "Auto"),
+    ("summarize", "Summarize"),
+    ("extract", "Extract"),
+    ("compare", "Compare"),
 ]
 
-# User-facing copy only (no indexing / embedding / vector jargon).
-MSG_LIBRARY_UPDATED = "Library updated."
-MSG_PREPARE_DOCS_FAILED = "Couldn't prepare documents. Please try again."
-MSG_PREPARE_SETTINGS_HINT = "Couldn't prepare documents. Adjust Settings, then try again."
-MSG_READ_FILES_FAILED = "Couldn't read text from those files. Try another file or check they aren't empty."
-MSG_NO_DOCS = "Add a file below your message, send again, then ask about it."
-MSG_CHAT_UNEXPECTED = "Couldn't complete that. Please try again."
-MSG_EMPTY_MESSAGE = "Please enter a message."
+# Short labels for the subtle line above the chat input (demo clarity without clutter).
+_TASK_MODE_COMPOSER_HINT: dict[str, str] = {
+    "auto": "Chat & document Q&A",
+    "summarize": "Summarize",
+    "extract": "Extract",
+    "compare": "Compare",
+}
+
+# Same widget key pattern as before: keeps ingest + sync behavior identical.
+_COMPOSER_KEY_PREFIX = "composer_"
 
 
-@dataclass
-class AssistantTurn:
-    """Result of routing: document-grounded vs general assistant vs error."""
-
-    mode: Literal["grounded", "general", "error"]
-    text: str
-    grounded: GroundedAnswer | None = None
-    hits: list[RetrievedChunk] | None = None
-    error: str | None = None
-
-
-ABOUT_APP_MD = """
-Mainstream assistants are built for **breadth**: many topics and many kinds of tasks.
-
-This app is aimed at **your uploaded documents**: add files, ask questions, and when your material is used you can see **sources** and supporting excerpts. You can also ask **general questions** without uploads; those answers use the model's general knowledge, not your library.
-
-It is meant for that workflow when you want answers tied to your own files, not for every situation, and not a replacement for every product.
-"""
-
-
-def _list_raw_files(raw_dir: Path) -> list[Path]:
-    if not raw_dir.is_dir():
-        return []
-    return sorted(
-        p for p in raw_dir.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_EXT
-    )
-
-
-def _library_fingerprint(raw_dir: Path) -> tuple[tuple[str, int], ...]:
-    files = _list_raw_files(raw_dir)
-    return tuple((p.name, int(p.stat().st_mtime_ns)) for p in files)
-
-
-def _save_uploads_to_raw(uploaded_files: list[Any] | None, raw_dir: Path) -> int:
-    if not uploaded_files:
-        return 0
-    n = 0
-    for f in uploaded_files:
-        (raw_dir / f.name).write_bytes(f.getvalue())
-        n += 1
-    return n
-
-
-def _preview_text(text: str, max_len: int = PREVIEW_CHARS) -> str:
-    t = (text or "").strip()
-    if len(t) <= max_len:
-        return t
-    return t[: max_len - 1].rstrip() + "..."
-
-
-def _hits_to_excerpts(hits: list[RetrievedChunk] | None) -> list[dict[str, Any]]:
-    if not hits:
-        return []
-    out: list[dict[str, Any]] = []
-    for h in hits:
-        meta = h.metadata
-        page = meta.get("page_number")
-        page_label = str(page) if page is not None else "-"
-        out.append(
-            {
-                "file_name": str(meta.get("source_name") or "Unknown"),
-                "chunk_id": str(meta.get("chunk_id") or ""),
-                "page_label": page_label,
-                "preview_text": _preview_text(h.page_content),
-            }
-        )
-    return out
-
-
-def _assistant_payload(res: GroundedAnswer, hits: list[RetrievedChunk] | None) -> dict[str, Any]:
-    return {
-        "role": "assistant",
-        "content": res.answer,
-        "grounded": True,
-        "sources": [asdict(s) for s in res.sources],
-        "excerpts": _hits_to_excerpts(hits),
-    }
-
-
-def _rebuild_knowledge_index(
+def ingest_composer_attachments(
     raw_dir: Path,
     faiss_folder: Path,
     *,
     chunk_size: int,
     chunk_overlap: int,
-) -> tuple[bool, str, int]:
-    if chunk_overlap >= chunk_size:
-        return False, MSG_PREPARE_SETTINGS_HINT, 0
+) -> tuple[str | None, bool]:
+    """
+    Save files from the current composer widget and rebuild the library index.
 
-    docs = load_raw_directory(raw_dir)
-    if not docs:
-        return False, MSG_PREPARE_DOCS_FAILED, 0
-
-    chunks = chunk_ingested_documents(
-        docs,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-    )
-    if not chunks:
-        return False, MSG_READ_FILES_FAILED, 0
-
-    embeddings = _cached_openai_embeddings(DEFAULT_EMBEDDING_MODEL)
-    store = build_faiss_from_chunks(chunks, embeddings=embeddings)
-    save_faiss_index(store, folder_path=faiss_folder, index_name=DEFAULT_INDEX_NAME)
-    nvec = faiss_vector_count(store)
-    return True, "", nvec
-
-
-def _ensure_index_matches_library(
-    raw_dir: Path,
-    faiss_folder: Path,
-    *,
-    chunk_size: int,
-    chunk_overlap: int,
-) -> tuple[bool, str]:
-    fp = _library_fingerprint(raw_dir)
-    if not fp:
-        return False, MSG_NO_DOCS
-
-    synced = st.session_state.get("kb_sync_fingerprint")
-    index_ready = faiss_index_files_exist(faiss_folder, index_name=DEFAULT_INDEX_NAME)
-
-    if index_ready and synced == fp:
-        return True, ""
-
-    ok, msg, _ = _rebuild_knowledge_index(
+    Returns (optional_warning_for_status_line, library_index_refreshed_ok).
+    Warnings are non-fatal: callers should still run the assistant for the user's question.
+    """
+    rid = int(st.session_state.get("composer_reset", 0))
+    key = f"{_COMPOSER_KEY_PREFIX}{rid}"
+    uploaded = st.session_state.get(key)
+    if debug_service.debug_enabled():
+        detected: list[str] = []
+        if uploaded:
+            for f in uploaded:
+                detected.append(getattr(f, "name", str(f)))
+        debug_service.merge(composer_widget_key=key, uploaded_detected=detected)
+    try:
+        n, saved_names = upload_service.save_uploads_to_raw(uploaded, raw_dir)
+    except OSError as exc:
+        if debug_service.debug_enabled():
+            debug_service.merge(
+                saved_filenames=[],
+                ingest_rebuild="skipped_save_failed",
+                exception_summary=debug_service.short_exc(exc),
+            )
+        return MSG_UPLOAD_FAILED, False
+    if debug_service.debug_enabled():
+        debug_service.merge(saved_filenames=saved_names)
+    if n == 0:
+        if debug_service.debug_enabled():
+            debug_service.merge(ingest_rebuild="skipped_no_new_files")
+        return None, False
+    ok, err_msg, _ = index_service.rebuild_knowledge_index(
         raw_dir,
         faiss_folder,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )
     if ok:
-        st.session_state.kb_sync_fingerprint = fp
-        return True, ""
-    return False, msg
+        st.session_state.kb_sync_fingerprint = index_service.library_fingerprint(raw_dir)
+        st.session_state.composer_reset = rid + 1
+        if debug_service.debug_enabled():
+            debug_service.merge(ingest_rebuild="rebuilt")
+        return None, True
+    if debug_service.debug_enabled():
+        debug_service.merge(ingest_rebuild="failed", ingest_error_summary=str(err_msg)[:200])
+    return MSG_DOCS_PREP_FAILED, False
 
 
-def answer_user_query(
-    query: str,
-    *,
+def sync_documents_manual(
     raw_dir: Path,
     faiss_folder: Path,
+    *,
     chunk_size: int,
     chunk_overlap: int,
-    top_k: int,
-) -> AssistantTurn:
-    """
-    Route to a general assistant reply when there is no library or retrieval is weak;
-    otherwise return a document-grounded answer with sources.
-    """
-    if not query.strip():
-        return AssistantTurn(mode="error", text=MSG_EMPTY_MESSAGE, error=MSG_EMPTY_MESSAGE)
-
-    if not _library_fingerprint(raw_dir):
-        try:
-            text = generate_general_answer(query)
-        except Exception:
-            return AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-        return AssistantTurn(mode="general", text=text)
-
-    ok, sync_msg = _ensure_index_matches_library(
+) -> None:
+    """Save any pending uploads, rebuild search data from disk, refresh sync fingerprint (UI entry point)."""
+    rid = int(st.session_state.get("composer_reset", 0))
+    key = f"{_COMPOSER_KEY_PREFIX}{rid}"
+    uploaded = st.session_state.get(key)
+    if debug_service.debug_enabled():
+        detected: list[str] = []
+        if uploaded:
+            for f in uploaded:
+                detected.append(getattr(f, "name", str(f)))
+        debug_service.merge(manual_sync_widget_key=key, manual_sync_uploads_detected=detected)
+    try:
+        n, saved_names = upload_service.save_uploads_to_raw(uploaded, raw_dir)
+    except OSError as exc:
+        if debug_service.debug_enabled():
+            debug_service.merge(
+                manual_sync_save_failed=True,
+                exception_summary=debug_service.short_exc(exc),
+            )
+        st.warning("Couldn't save your files. Check permissions and try again.")
+        return
+    if debug_service.debug_enabled():
+        debug_service.merge(manual_sync_saved_filenames=saved_names)
+    ok, err_msg, _ = index_service.rebuild_knowledge_index(
         raw_dir,
         faiss_folder,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )
-    if not ok:
-        return AssistantTurn(mode="error", text=sync_msg, error=sync_msg)
-
-    fp_now = _library_fingerprint(raw_dir)
-    if _wants_no_retrieval_fastpath(query):
-        try:
-            text = generate_general_answer(query)
-        except Exception:
-            return AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-        return AssistantTurn(mode="general", text=text)
-
-    cache_key = f"{fp_now!r}|{_faiss_disk_version(faiss_folder, DEFAULT_INDEX_NAME)}"
-    store = _cached_faiss_store(str(faiss_folder.resolve()), DEFAULT_INDEX_NAME, cache_key)
-    nvec = faiss_vector_count(store)
-    if nvec == 0:
-        try:
-            text = generate_general_answer(query)
-        except Exception:
-            return AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-        return AssistantTurn(mode="general", text=text)
-
-    k = min(int(top_k), nvec)
-    hits = retrieve_top_k(store, query, k=k)
-    if retrieval_is_useful(hits):
-        try:
-            ga = generate_grounded_answer(query, hits)
-        except Exception:
-            return AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-        return AssistantTurn(mode="grounded", text=ga.answer, grounded=ga, hits=hits)
-
-    try:
-        text = generate_general_answer(query)
-    except Exception:
-        return AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-    return AssistantTurn(mode="general", text=text)
+    if ok:
+        st.session_state.kb_sync_fingerprint = index_service.library_fingerprint(raw_dir)
+        if n > 0:
+            st.session_state.composer_reset = rid + 1
+        if debug_service.debug_enabled():
+            debug_service.merge(manual_sync="rebuilt_ok")
+        st.session_state["_ka_sync_toast"] = True
+        return
+    if debug_service.debug_enabled():
+        debug_service.merge(manual_sync="rebuild_failed", manual_sync_error_summary=str(err_msg)[:200])
+    st.warning(err_msg or "Couldn't sync documents. Try again.")
 
 
-def _with_status_note(msg: dict[str, Any], note: str | None) -> dict[str, Any]:
-    if note and note.strip():
-        return {**msg, "status_note": note.strip()}
-    return msg
-
-
-def _append_assistant_turn(
-    turn: AssistantTurn,
-    *,
-    ingest_note: str | None = None,
-) -> None:
-    note = ingest_note.strip() if ingest_note else None
-    if turn.mode == "error":
-        st.session_state.messages.append(
-            _with_status_note({"role": "assistant", "content": turn.error or turn.text}, note)
-        )
-    elif turn.mode == "general":
-        st.session_state.messages.append(_with_status_note({"role": "assistant", "content": turn.text}, note))
-    elif turn.mode == "grounded" and turn.grounded:
-        st.session_state.messages.append(_with_status_note(_assistant_payload(turn.grounded, turn.hits), note))
-
-
-def _read_settings() -> tuple[int, int, int]:
+def read_settings() -> tuple[int, int, int]:
     cs = int(st.session_state.get("settings_chunk_size", st.session_state.get("adv_chunk_size", 500)))
     co = int(st.session_state.get("settings_chunk_overlap", st.session_state.get("adv_chunk_overlap", 80)))
     tk = int(st.session_state.get("settings_top_k", st.session_state.get("adv_top_k", DEFAULT_TOP_K)))
@@ -334,7 +156,7 @@ def _read_settings() -> tuple[int, int, int]:
     return cs, co, tk
 
 
-def _init_session() -> None:
+def init_session() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "kb_sync_fingerprint" not in st.session_state:
@@ -350,24 +172,27 @@ def _init_session() -> None:
     _tk0 = int(st.session_state.get("settings_top_k", DEFAULT_TOP_K))
     if _tk0 > SIDEBAR_TOP_K_MAX or _tk0 < 1:
         st.session_state.settings_top_k = max(1, min(SIDEBAR_TOP_K_MAX, _tk0))
+    if "task_mode" not in st.session_state:
+        st.session_state.task_mode = "auto"
+    if "summarize_scope" not in st.session_state:
+        st.session_state.summarize_scope = "all"
 
 
-def _new_chat() -> None:
+def read_task_settings() -> tuple[str, str]:
+    """Active document task mode and summarize scope (filename or ``all``)."""
+    mode = str(st.session_state.get("task_mode", "auto"))
+    if mode not in ("auto", "summarize", "extract", "compare"):
+        mode = "auto"
+    scope = str(st.session_state.get("summarize_scope", "all"))
+    return mode, scope
+
+
+def new_chat() -> None:
     """Clear chat only; library files and index on disk are unchanged."""
     st.session_state.messages = []
 
 
-def _display_path_hint(path_str: str | None) -> str | None:
-    if not path_str:
-        return None
-    try:
-        p = Path(path_str)
-        return p.name if p.name else path_str
-    except (TypeError, ValueError):
-        return path_str
-
-
-def _is_grounded_assistant_message(msg: dict[str, Any]) -> bool:
+def is_grounded_assistant_message(msg: dict[str, Any]) -> bool:
     """Document-grounded turns only (show Sources / excerpts expanders)."""
     if msg.get("grounded"):
         return True
@@ -376,92 +201,220 @@ def _is_grounded_assistant_message(msg: dict[str, Any]) -> bool:
     return False
 
 
-def _render_user_message(content: str) -> None:
+def render_user_message(content: str) -> None:
     st.markdown(content)
 
 
-def _render_sources_expander(sources: list[dict[str, Any]]) -> None:
-    with st.expander("Sources", expanded=False):
+def render_sources_expander(sources: list[dict[str, Any]]) -> None:
+    with st.expander("Sources referenced", expanded=False):
         for i, s in enumerate(sources):
             if i:
                 st.markdown('<div class="ka-src-gap"></div>', unsafe_allow_html=True)
             sn = s.get("source_number", "?")
             st.markdown(
-                f"**[{sn}]** {s.get('source_name', '')} &middot; p. {s.get('page_label', 'n/a')}"
+                f'<p class="ka-src-line"><span class="ka-src-num">[{html.escape(str(sn))}]</span> '
+                f'<span class="ka-src-name">{html.escape(str(s.get("source_name", "") or "—"))}</span> '
+                f'<span class="ka-src-meta">&middot; p. {html.escape(str(s.get("page_label", "n/a")))}</span></p>',
+                unsafe_allow_html=True,
             )
-            fp = _display_path_hint(s.get("file_path"))
+            fp = message_service.display_path_hint(s.get("file_path"))
             if fp:
                 st.caption(fp)
 
 
-def _render_excerpts_expander(excerpts: list[dict[str, Any]]) -> None:
+def render_excerpts_expander(excerpts: list[dict[str, Any]]) -> None:
     with st.expander("Supporting excerpts", expanded=False):
         for i, p in enumerate(excerpts):
             if i:
                 st.markdown('<div class="ka-ex-gap"></div>', unsafe_allow_html=True)
             fn = p.get("file_name", "")
             pg = p.get("page_label", "-")
-            st.markdown(f"**{html.escape(str(fn))}** &middot; Page {html.escape(str(pg))}")
-            st.caption(p.get("preview_text") or "")
+            st.markdown(
+                f'<p class="ka-ex-head">{html.escape(str(fn))} <span class="ka-ex-page">· p. {html.escape(str(pg))}</span></p>',
+                unsafe_allow_html=True,
+            )
+            body = html.escape(str(p.get("preview_text") or "").strip() or "—")
+            st.markdown(f'<pre class="ka-ex-body">{body}</pre>', unsafe_allow_html=True)
 
 
-def _render_grounded_expanders(msg: dict[str, Any]) -> None:
+def render_composer_task_hint(task_mode: str, summarize_scope: str) -> None:
+    """Muted one-liner above the chat input (current task; hidden for default Auto)."""
+    if task_mode == "auto":
+        return
+    label = _TASK_MODE_COMPOSER_HINT.get(task_mode)
+    if not label:
+        return
+    extra = ""
+    if task_mode == "summarize" and summarize_scope and summarize_scope != "all":
+        extra = f" · {html.escape(summarize_scope)}"
+    st.markdown(
+        f'<p class="ka-composer-hint"><span class="ka-composer-hint-k">Task</span> {html.escape(label)}{extra}</p>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_grounded_expanders(msg: dict[str, Any]) -> None:
     sources = msg.get("sources") or []
     legacy_passages = msg.get("retrieved_passages") or []
     excerpts = msg.get("excerpts") or legacy_passages
     if sources:
-        _render_sources_expander(sources)
+        render_sources_expander(sources)
     if excerpts:
-        _render_excerpts_expander(excerpts)
+        render_excerpts_expander(excerpts)
 
 
-def _render_assistant_message(msg: dict[str, Any]) -> None:
-    # Answer first; optional status (e.g. library update) after the body, muted.
+def render_empty_state_hero() -> None:
+    """Title, value prop, best-for context, and starter prompt entry (no messages yet)."""
+    st.markdown(
+        f"""
+        <div class="ka-hero-wrap">
+          <div class="ka-hero-title">{html.escape(APP_NAME)}</div>
+          <p class="ka-value">{html.escape(EMPTY_STATE_VALUE_PROP)}</p>
+          <p class="ka-best-for">{html.escape(HERO_BEST_FOR)}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<p class="ka-empty-label">Try asking</p>', unsafe_allow_html=True)
+    for i, q in enumerate(STARTER_QUESTIONS):
+        if st.button(q, key=f"starter_{i}", use_container_width=True, type="secondary"):
+            st.session_state.pending_starter = q
+            st.rerun()
+    st.markdown('<div class="ka-empty-pad"></div>', unsafe_allow_html=True)
+
+
+def render_sidebar_positioning() -> None:
+    """Trust and positioning copy: why this workspace, factual comparison (sidebar, collapsed by default)."""
+    with st.expander("Why this workspace", expanded=False):
+        st.markdown(WHY_THIS_WORKSPACE_MD.strip())
+    with st.expander("How this compares", expanded=False):
+        st.caption("Factual differences in focus—not a ranking of quality.")
+        st.markdown(COMPARISON_MD.strip())
+
+
+def render_assistant_message(msg: dict[str, Any]) -> None:
     st.markdown(msg.get("content") or "")
     if msg.get("status_note"):
-        st.markdown(f'<p class="ka-msg-status">{html.escape(str(msg["status_note"]))}</p>', unsafe_allow_html=True)
-    if _is_grounded_assistant_message(msg):
-        _render_grounded_expanders(msg)
+        st.markdown(
+            f'<p class="ka-msg-status">{message_service.render_status_note_html(str(msg["status_note"]))}</p>',
+            unsafe_allow_html=True,
+        )
+    if is_grounded_assistant_message(msg):
+        render_grounded_expanders(msg)
 
 
-def _ingest_composer_attachments(
+def render_sidebar_documents_and_actions(
     raw_dir: Path,
     faiss_folder: Path,
-    *,
-    chunk_size: int,
-    chunk_overlap: int,
-) -> tuple[str | None, bool]:
-    """
-    Save files from the current composer widget and rebuild the library index.
-    Returns (error_message_or_none, did_save_any_file).
-    """
+) -> None:
+    """Upload, library list, preferences (before sync so values apply), sync, new chat, positioning, debug."""
+    st.markdown('<p class="ka-side-h">Documents</p>', unsafe_allow_html=True)
     rid = int(st.session_state.get("composer_reset", 0))
-    key = f"composer_{rid}"
-    uploaded = st.session_state.get(key)
-    n = _save_uploads_to_raw(uploaded, raw_dir)
-    if n == 0:
-        return None, False
-    ok, err_msg, _ = _rebuild_knowledge_index(
-        raw_dir,
-        faiss_folder,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
+    st.file_uploader(
+        "Upload documents",
+        type=["pdf", "docx", "txt"],
+        accept_multiple_files=True,
+        key=f"{_COMPOSER_KEY_PREFIX}{rid}",
+        label_visibility="visible",
+        help="PDF, Word, or text. Included with your next send, or use Sync.",
     )
-    if ok:
-        st.session_state.kb_sync_fingerprint = _library_fingerprint(raw_dir)
-        st.session_state.composer_reset = rid + 1
-        return None, True
-    return err_msg, True
+
+    st.markdown('<p class="ka-side-h">Your library</p>', unsafe_allow_html=True)
+    files_now = index_service.list_raw_files(raw_dir)
+    if files_now:
+        for p in files_now:
+            st.markdown(f'<p class="ka-lib-file">{html.escape(p.name)}</p>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<p class="ka-lib-empty">No documents yet. Upload, then Sync.</p>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
+
+    # Render before Sync so chunk / top_k values are current for this run when the button fires.
+    with st.expander("Preferences", expanded=False):
+        _tk = max(1, min(SIDEBAR_TOP_K_MAX, int(st.session_state.get("settings_top_k", DEFAULT_TOP_K))))
+        st.session_state.settings_top_k = st.select_slider(
+            "Sources to show",
+            options=list(range(1, SIDEBAR_TOP_K_MAX + 1)),
+            value=_tk,
+            help="How many document passages can inform one answer.",
+        )
+        st.session_state.settings_chunk_size = st.number_input(
+            "Passage size",
+            100,
+            4000,
+            int(st.session_state.get("settings_chunk_size", 500)),
+            step=50,
+            help="Larger passages carry more context per match. Adjust only if needed.",
+        )
+        st.session_state.settings_chunk_overlap = st.number_input(
+            "Passage overlap",
+            0,
+            2000,
+            int(st.session_state.get("settings_chunk_overlap", 80)),
+            step=10,
+            help="Shared text between passages. Usually leave as-is.",
+        )
+        st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
+        _vals = [v for v, _ in _TASK_MODE_OPTIONS]
+        _labels = {v: lab for v, lab in _TASK_MODE_OPTIONS}
+        _cur_m = st.session_state.get("task_mode", "auto")
+        if _cur_m not in _vals:
+            _cur_m = "auto"
+        _mi = _vals.index(_cur_m)
+        st.session_state.task_mode = st.selectbox(
+            "Task mode",
+            options=_vals,
+            index=_mi,
+            format_func=lambda k: _labels.get(str(k), str(k)),
+            help="Auto: normal chat and Q&A. Other modes use a focused prompt on your synced library.",
+        )
+        if st.session_state.task_mode == "summarize":
+            _files = index_service.list_raw_files(raw_dir)
+            _scope_opts = ["all"] + [p.name for p in _files]
+            _sc = st.session_state.get("summarize_scope", "all")
+            if _sc not in _scope_opts:
+                _sc = "all"
+            st.session_state.summarize_scope = st.selectbox(
+                "Summarize scope",
+                options=_scope_opts,
+                index=_scope_opts.index(_sc),
+                format_func=lambda x: "All documents" if x == "all" else str(x),
+                help="All documents or one file from your library.",
+            )
+
+    cs, co, _tk_read = read_settings()
+    if st.button("Sync documents", use_container_width=True, type="secondary"):
+        sync_documents_manual(
+            raw_dir,
+            faiss_folder,
+            chunk_size=cs,
+            chunk_overlap=co,
+        )
+        st.rerun()
+
+    st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
+    if st.button("New chat", use_container_width=True, type="primary"):
+        new_chat()
+        st.rerun()
+
+    st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
+    render_sidebar_positioning()
+
+    debug_service.render_debug_panel()
 
 
-_init_session()
-
+# set_page_config must run before any other Streamlit command (including session_state).
 st.set_page_config(
     page_title=APP_NAME,
     page_icon="💬",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
+
+init_session()
 
 raw_dir = get_default_raw_dir()
 raw_dir.mkdir(parents=True, exist_ok=True)
@@ -470,224 +423,385 @@ faiss_folder = get_default_faiss_folder()
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 1.25rem !important; padding-bottom: 1.5rem !important;
-      max-width: 42rem !important; margin-left: auto !important; margin-right: auto !important; }
-    div[data-testid="stChatInput"] { padding-bottom: 0.5rem; padding-top: 0.35rem; }
+    :root {
+      --ka-text: rgba(15, 23, 42, 0.93);
+      --ka-muted: rgba(15, 23, 42, 0.52);
+      --ka-line: rgba(15, 23, 42, 0.09);
+      --ka-sidebar: rgba(248, 250, 252, 0.97);
+      --ka-surface: rgba(255, 255, 255, 0.72);
+      --ka-chat-user: rgba(241, 245, 249, 0.85);
+      --ka-chat-asst: rgba(255, 255, 255, 0.9);
+      --ka-accent: rgba(59, 130, 246, 0.35);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ka-text: rgba(248, 250, 252, 0.94);
+        --ka-muted: rgba(248, 250, 252, 0.52);
+        --ka-line: rgba(255, 255, 255, 0.1);
+        --ka-sidebar: rgba(15, 23, 42, 0.98);
+        --ka-surface: rgba(30, 41, 59, 0.55);
+        --ka-chat-user: rgba(30, 41, 59, 0.75);
+        --ka-chat-asst: rgba(15, 23, 42, 0.55);
+        --ka-accent: rgba(96, 165, 250, 0.45);
+      }
+    }
+    .main .block-container {
+      padding-top: 1.35rem !important;
+      padding-bottom: 2.25rem !important;
+      max-width: 44rem !important;
+      margin-left: auto !important;
+      margin-right: auto !important;
+    }
+    .ka-composer-hint {
+      font-size: 0.72rem !important;
+      line-height: 1.4 !important;
+      color: var(--ka-muted) !important;
+      margin: 0 0 0.35rem 0 !important;
+      padding: 0 0.15rem;
+      letter-spacing: 0.02em;
+    }
+    .ka-composer-hint-k {
+      text-transform: uppercase;
+      font-weight: 600;
+      font-size: 0.62rem;
+      letter-spacing: 0.08em;
+      margin-right: 0.35rem;
+      opacity: 0.85;
+    }
+    div[data-testid="stChatInput"] {
+      padding-bottom: 0.85rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--ka-line);
+      margin-top: 0.5rem;
+    }
     [data-testid="stChatMessage"] {
-      padding-top: 0.25rem !important;
-      padding-bottom: 0.25rem !important;
-      margin-bottom: 1rem !important;
+      padding: 0.55rem 0.75rem 0.65rem 0.75rem !important;
+      margin-bottom: 1.25rem !important;
+      border-radius: 0.75rem;
+      border: 1px solid var(--ka-line);
+      background: var(--ka-chat-asst);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+      background: var(--ka-chat-user);
+      border-left: 3px solid var(--ka-accent);
     }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p,
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] li {
-      line-height: 1.65; font-size: 0.98rem; margin-bottom: 0.5em;
+      line-height: 1.68;
+      font-size: 0.96rem;
+      margin-bottom: 0.52em;
+      color: var(--ka-text);
     }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p:last-child { margin-bottom: 0; }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] pre {
-      line-height: 1.5; font-size: 0.9rem; border-radius: 0.35rem;
+      line-height: 1.52;
+      font-size: 0.86rem;
+      border-radius: 0.45rem;
+      border: 1px solid var(--ka-line);
+      background: var(--ka-surface) !important;
+      padding: 0.55rem 0.65rem;
     }
     p.ka-msg-status {
-      margin: 0.65rem 0 0 0 !important;
-      font-size: 0.78rem !important;
-      line-height: 1.45 !important;
-      opacity: 0.58 !important;
-      letter-spacing: 0.01em;
+      margin: 0.85rem 0 0 0 !important;
+      font-size: 0.74rem !important;
+      line-height: 1.52 !important;
+      color: var(--ka-muted) !important;
+      letter-spacing: 0.015em;
     }
-    [data-testid="stExpander"] { margin-top: 0.5rem !important; margin-bottom: 0.2rem !important; }
-    [data-testid="stExpander"] details { border: none !important; background: transparent !important; }
+    [data-testid="stChatMessage"] [data-testid="stExpander"] {
+      margin-top: 0.55rem !important;
+    }
+    [data-testid="stExpander"] {
+      margin-top: 0.5rem !important;
+      margin-bottom: 0.2rem !important;
+    }
+    [data-testid="stExpander"] details {
+      border: 1px solid var(--ka-line) !important;
+      border-radius: 0.5rem !important;
+      background: var(--ka-surface) !important;
+    }
     [data-testid="stExpander"] summary {
-      font-weight: 500; font-size: 0.88rem; letter-spacing: 0.01em; padding: 0.4rem 0;
-      color: inherit; opacity: 0.88;
+      font-weight: 500;
+      font-size: 0.82rem;
+      letter-spacing: 0.02em;
+      padding: 0.5rem 0.7rem;
+      color: var(--ka-text);
+      opacity: 0.92;
     }
-    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p { margin-bottom: 0.35rem; font-size: 0.9rem; }
-    [data-testid="stExpander"] [data-testid="stCaptionContainer"] { margin-top: 0.12rem; opacity: 0.88; }
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p {
+      margin-bottom: 0.4rem;
+      font-size: 0.86rem;
+      line-height: 1.5;
+    }
+    [data-testid="stExpander"] [data-testid="stCaptionContainer"] {
+      margin-top: 0.15rem;
+      opacity: 0.88;
+      font-size: 0.78rem !important;
+    }
+    p.ka-src-line {
+      margin: 0 !important;
+      line-height: 1.45 !important;
+      font-size: 0.86rem !important;
+      color: var(--ka-text) !important;
+    }
+    .ka-src-num { font-weight: 600; opacity: 0.9; margin-right: 0.25rem; }
+    .ka-src-name { font-weight: 500; }
+    .ka-src-meta { color: var(--ka-muted); font-size: 0.82rem; }
+    p.ka-ex-head {
+      margin: 0 0 0.35rem 0 !important;
+      font-size: 0.82rem !important;
+      font-weight: 600;
+      color: var(--ka-text) !important;
+    }
+    .ka-ex-page { font-weight: 400; color: var(--ka-muted); }
+    pre.ka-ex-body {
+      margin: 0 !important;
+      padding: 0.55rem 0.65rem !important;
+      font-size: 0.8rem !important;
+      line-height: 1.48 !important;
+      white-space: pre-wrap !important;
+      word-break: break-word;
+      border-radius: 0.45rem;
+      border: 1px solid var(--ka-line);
+      background: var(--ka-surface) !important;
+      color: var(--ka-text) !important;
+      font-family: ui-sans-serif, system-ui, sans-serif !important;
+    }
     .ka-src-gap { height: 0.55rem; }
-    .ka-ex-gap { height: 0.6rem; margin: 0.45rem 0; border-top: 1px solid rgba(128,128,128,0.1); }
-    [data-testid="stSidebar"] { background: rgba(128,128,128,0.045) !important; border-right: 1px solid rgba(128,128,128,0.12) !important; }
+    .ka-ex-gap {
+      height: 0.6rem;
+      margin: 0.5rem 0;
+      border-top: 1px solid var(--ka-line);
+    }
+    [data-testid="stSidebar"] {
+      background: var(--ka-sidebar) !important;
+      border-right: 1px solid var(--ka-line) !important;
+    }
     [data-testid="stSidebarContent"] {
-      padding-top: 0.75rem !important; padding-bottom: 1rem !important;
-      font-size: 0.92rem !important;
+      padding-top: 1.1rem !important;
+      padding-bottom: 1.35rem !important;
+      padding-left: 0.9rem !important;
+      padding-right: 0.9rem !important;
+      font-size: 0.89rem !important;
     }
-    [data-testid="stSidebarContent"] .stMarkdown h3 {
-      margin-bottom: 0.1rem !important; font-weight: 600; font-size: 1.05rem !important;
-      letter-spacing: -0.02em; color: rgba(0,0,0,0.82);
+    .ka-brand-title {
+      font-weight: 600;
+      font-size: 1.14rem;
+      letter-spacing: -0.032em;
+      color: var(--ka-text);
+      margin: 0 0 0.25rem 0;
+      line-height: 1.22;
     }
-    [data-testid="stSidebarContent"] [data-testid="stCaption"] {
-      margin-top: 0.05rem !important; margin-bottom: 0.6rem !important; line-height: 1.4;
-      font-size: 0.82rem !important; opacity: 0.72;
+    .ka-brand-sub {
+      font-size: 0.79rem;
+      line-height: 1.48;
+      color: var(--ka-muted);
+      margin: 0 0 1rem 0;
     }
-    [data-testid="stSidebar"] [data-testid="stExpander"] { margin-top: 0.35rem !important; margin-bottom: 0.15rem !important; }
-    [data-testid="stSidebar"] [data-testid="stExpander"] summary { font-size: 0.82rem !important; opacity: 0.85; }
     .ka-side-h {
-      font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
-      opacity: 0.45; margin: 0 0 0.35rem 0;
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--ka-muted);
+      margin: 0.35rem 0 0.42rem 0;
     }
-    .ka-side-sp { height: 0.4rem; }
-    p.ka-lib-file { margin: 0.12rem 0 !important; font-size: 0.86rem !important; line-height: 1.35 !important; opacity: 0.9; }
-    .ka-lib-empty { font-size: 0.8rem !important; opacity: 0.55; margin: 0 0 0.25rem 0 !important; }
+    .ka-side-sp { height: 0.55rem; }
+    p.ka-lib-file {
+      margin: 0.12rem 0 !important;
+      font-size: 0.835rem !important;
+      line-height: 1.38 !important;
+      color: var(--ka-text);
+    }
+    .ka-lib-empty {
+      font-size: 0.79rem !important;
+      color: var(--ka-muted) !important;
+      margin: 0 0 0.25rem 0 !important;
+      line-height: 1.48;
+    }
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] {
+      padding-bottom: 0.3rem;
+    }
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] label p {
+      font-size: 0.77rem !important;
+      font-weight: 500 !important;
+      color: var(--ka-muted) !important;
+    }
+    section[data-testid="stFileUploaderDropzone"] {
+      min-height: 2.55rem;
+      padding: 0.45rem 0.6rem;
+      border-radius: 0.5rem !important;
+      border-style: dashed !important;
+      border-color: var(--ka-line) !important;
+      background: var(--ka-surface) !important;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    [data-testid="stSidebar"] table {
+      width: 100%;
+      font-size: 0.75rem;
+      line-height: 1.42;
+      border-collapse: collapse;
+      margin: 0.3rem 0 0 0;
+    }
+    [data-testid="stSidebar"] table th,
+    [data-testid="stSidebar"] table td {
+      border-bottom: 1px solid var(--ka-line);
+      padding: 0.42rem 0.35rem 0.42rem 0;
+      vertical-align: top;
+      text-align: left;
+    }
+    [data-testid="stSidebar"] table th { font-weight: 600; color: var(--ka-text); }
+    [data-testid="stSidebar"] table td { color: var(--ka-muted); }
     .ka-hero-wrap {
-      text-align: center; padding: 2.75rem 1.25rem 0.5rem; max-width: 36rem; margin: 0 auto;
+      text-align: center;
+      padding: 2.75rem 1.25rem 1.25rem;
+      max-width: 31rem;
+      margin: 0 auto 0.5rem auto;
+      border-radius: 1rem;
+      border: 1px solid var(--ka-line);
+      background: var(--ka-surface);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
     }
-    .ka-hero-wrap h1 {
-      font-weight: 600; letter-spacing: -0.04em; margin: 0 0 0.75rem 0; border: none;
-      font-size: clamp(1.55rem, 4.2vw, 1.95rem); line-height: 1.18; color: rgba(0,0,0,0.9);
+    .ka-hero-wrap .ka-hero-title {
+      font-weight: 600;
+      letter-spacing: -0.038em;
+      margin: 0 0 0.75rem 0;
+      font-size: clamp(1.42rem, 3.6vw, 1.82rem);
+      line-height: 1.18;
+      color: var(--ka-text);
     }
     .ka-hero-wrap .ka-value {
-      margin: 0; font-size: 1.04rem; line-height: 1.55; font-weight: 400;
-      color: rgba(0,0,0,0.62); max-width: 28rem; margin-left: auto; margin-right: auto;
+      margin: 0 0 1.1rem 0;
+      font-size: 0.98rem;
+      line-height: 1.58;
+      font-weight: 400;
+      color: var(--ka-muted);
+    }
+    .ka-best-for {
+      margin: 0 auto;
+      max-width: 28rem;
+      font-size: 0.84rem;
+      line-height: 1.58;
+      color: var(--ka-muted);
+      text-align: center;
     }
     p.ka-empty-label {
-      text-align: center; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.11em;
-      font-weight: 500; color: rgba(0,0,0,0.38); margin: 2rem 0 0.9rem 0 !important;
+      text-align: center;
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.13em;
+      font-weight: 600;
+      color: var(--ka-muted);
+      margin: 2rem 0 0.75rem 0 !important;
     }
-    .ka-empty-pad { height: 1.25rem; }
-    div[data-testid="stVerticalBlock"] > div[data-testid="stFileUploader"] {
-      padding-bottom: 0.35rem; margin-bottom: 0; max-width: 42rem; margin-left: auto; margin-right: auto;
+    .ka-empty-pad { height: 1.65rem; }
+    /* Streamlit “Dark” theme (Settings) — mirrors prefers-color-scheme dark tokens */
+    .stApp[data-theme="dark"] {
+      --ka-text: rgba(248, 250, 252, 0.94);
+      --ka-muted: rgba(248, 250, 252, 0.52);
+      --ka-line: rgba(255, 255, 255, 0.1);
+      --ka-sidebar: rgba(15, 23, 42, 0.98);
+      --ka-surface: rgba(30, 41, 59, 0.55);
+      --ka-chat-user: rgba(30, 41, 59, 0.75);
+      --ka-chat-asst: rgba(15, 23, 42, 0.55);
+      --ka-accent: rgba(96, 165, 250, 0.45);
     }
-    div[data-testid="stVerticalBlock"] > div[data-testid="stFileUploader"] label p {
-      font-size: 0.82rem !important; opacity: 0.72 !important; font-weight: 500 !important;
-    }
-    section[data-testid="stFileUploaderDropzone"] { min-height: 2.25rem; padding: 0.35rem 0.5rem; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+if st.session_state.pop("_ka_sync_toast", False):
+    st.toast("Library synced", icon="✓")
+if st.session_state.pop("_ka_ingest_toast", False):
+    st.toast("Uploads added to library", icon="✓")
+
 with st.sidebar:
-    st.markdown(f"### {APP_NAME}")
-    st.caption(SIDEBAR_CAPTION)
+    st.markdown(f'<p class="ka-brand-title">{html.escape(APP_NAME)}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="ka-brand-sub">{html.escape(SIDEBAR_CAPTION)}</p>', unsafe_allow_html=True)
+    render_sidebar_documents_and_actions(raw_dir, faiss_folder)
 
-    st.markdown('<p class="ka-side-h">Library</p>', unsafe_allow_html=True)
-    files_now = _list_raw_files(raw_dir)
-    if files_now:
-        for p in files_now:
-            st.markdown(f'<p class="ka-lib-file">{html.escape(p.name)}</p>', unsafe_allow_html=True)
-    else:
-        st.markdown('<p class="ka-lib-empty">No files yet. Add them below the chat.</p>', unsafe_allow_html=True)
-
-    st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
-
-    if st.button("New chat", use_container_width=True, type="primary"):
-        _new_chat()
-        st.rerun()
-
-    st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
-
-    with st.expander("More options", expanded=False):
-        _tk = max(1, min(SIDEBAR_TOP_K_MAX, int(st.session_state.get("settings_top_k", DEFAULT_TOP_K))))
-        st.session_state.settings_top_k = st.select_slider(
-            "Sources per answer",
-            options=list(range(1, SIDEBAR_TOP_K_MAX + 1)),
-            value=_tk,
-            help="How many places in your files can inform one reply.",
-        )
-        st.session_state.settings_chunk_size = st.number_input(
-            "Context length",
-            100,
-            4000,
-            int(st.session_state.get("settings_chunk_size", 500)),
-            step=50,
-            help="More text per segment. Change only if you need different behavior.",
-        )
-        st.session_state.settings_chunk_overlap = st.number_input(
-            "Overlap",
-            0,
-            2000,
-            int(st.session_state.get("settings_chunk_overlap", 80)),
-            step=10,
-            help="Shared text between segments. Usually leave as-is.",
-        )
-
-    with st.expander("About", expanded=False):
-        st.markdown(ABOUT_APP_MD)
-
-cs, co, tk = _read_settings()
+cs, co, tk = read_settings()
+task_mode, summarize_scope = read_task_settings()
 
 pending = st.session_state.pop("pending_starter", None)
 if pending:
     st.session_state.messages.append({"role": "user", "content": pending})
-    with st.spinner("Thinking..."):
+    debug_service.debug_begin_turn("pending_starter")
+    if debug_service.debug_enabled():
+        debug_service.merge(task_mode=task_mode, summarize_scope=summarize_scope)
+    with st.spinner("Working…"):
         try:
-            turn = answer_user_query(
+            turn = chat_service.answer_user_query(
                 pending,
                 raw_dir=raw_dir,
                 faiss_folder=faiss_folder,
                 chunk_size=cs,
                 chunk_overlap=co,
                 top_k=tk,
+                task_mode=task_mode,
+                summarize_scope=summarize_scope,
             )
-        except Exception:
-            turn = AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-    _append_assistant_turn(turn)
+        except Exception as exc:
+            debug_service.merge(exception_summary=debug_service.short_exc(exc))
+            text, _gerr = chat_service.safe_general_answer(pending)
+            turn = chat_service.AssistantTurn(mode="general", text=text)
+    chat_service.append_assistant_turn(st.session_state.messages, turn)
 
 if not st.session_state.messages:
-    st.markdown(
-        f"""
-        <div class="ka-hero-wrap">
-          <h1>{html.escape(APP_NAME)}</h1>
-          <p class="ka-value">{html.escape(EMPTY_STATE_VALUE_PROP)}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown('<p class="ka-empty-label">Suggestions</p>', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    for i, (col, q) in enumerate(zip((c1, c2, c3), STARTER_QUESTIONS)):
-        with col:
-            if st.button(q, key=f"starter_{i}", use_container_width=True, type="secondary"):
-                st.session_state.pending_starter = q
-                st.rerun()
-    st.markdown('<div class="ka-empty-pad"></div>', unsafe_allow_html=True)
+    render_empty_state_hero()
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant":
-            _render_assistant_message(msg)
+            render_assistant_message(msg)
         else:
-            _render_user_message(msg.get("content") or "")
+            render_user_message(msg.get("content") or "")
 
-rid = int(st.session_state.get("composer_reset", 0))
-st.file_uploader(
-    "Add files",
-    type=["pdf", "docx", "txt"],
-    accept_multiple_files=True,
-    key=f"composer_{rid}",
-    label_visibility="visible",
-    help="Used with your next message.",
-)
-
-prompt = st.chat_input("Ask anything")
+render_composer_task_hint(task_mode, summarize_scope)
+prompt = st.chat_input("Ask something…")
 if prompt:
     q = prompt.strip()
     if q:
+        debug_service.debug_begin_turn("chat_input")
+        if debug_service.debug_enabled():
+            debug_service.merge(task_mode=task_mode, summarize_scope=summarize_scope)
         st.session_state.messages.append({"role": "user", "content": q})
-        ingest_err: str | None = None
-        turn2: AssistantTurn | None = None
-        had_new_upload = False
-        with st.spinner("Thinking..."):
+        ingest_warn: str | None = None
+        library_refreshed = False
+        turn2: chat_service.AssistantTurn | None = None
+        with st.spinner("Working…"):
             try:
-                ingest_err, had_new_upload = _ingest_composer_attachments(
+                ingest_warn, library_refreshed = ingest_composer_attachments(
                     raw_dir,
                     faiss_folder,
                     chunk_size=cs,
                     chunk_overlap=co,
                 )
-                if ingest_err:
-                    st.session_state.messages.append({"role": "assistant", "content": ingest_err})
-                else:
-                    turn2 = answer_user_query(
-                        q,
-                        raw_dir=raw_dir,
-                        faiss_folder=faiss_folder,
-                        chunk_size=cs,
-                        chunk_overlap=co,
-                        top_k=tk,
-                    )
-            except Exception:
-                turn2 = AssistantTurn(mode="error", text=MSG_CHAT_UNEXPECTED, error=MSG_CHAT_UNEXPECTED)
-        if not ingest_err and turn2 is not None:
-            _append_assistant_turn(
+                turn2 = chat_service.answer_user_query(
+                    q,
+                    raw_dir=raw_dir,
+                    faiss_folder=faiss_folder,
+                    chunk_size=cs,
+                    chunk_overlap=co,
+                    top_k=tk,
+                    task_mode=task_mode,
+                    summarize_scope=summarize_scope,
+                )
+            except Exception as exc:
+                debug_service.merge(exception_summary=debug_service.short_exc(exc))
+                text, _gerr = chat_service.safe_general_answer(q)
+                turn2 = chat_service.AssistantTurn(mode="general", text=text)
+        if turn2 is not None:
+            chat_service.append_assistant_turn(
+                st.session_state.messages,
                 turn2,
-                ingest_note=MSG_LIBRARY_UPDATED if had_new_upload else None,
+                ingest_note=message_service.merge_notes(
+                    ingest_warn,
+                    MSG_LIBRARY_UPDATED if library_refreshed else None,
+                ),
             )
+        if library_refreshed:
+            st.session_state["_ka_ingest_toast"] = True
         st.rerun()
