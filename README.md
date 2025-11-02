@@ -1,208 +1,131 @@
-# RAG-Based Document Retrieval System
+# Knowledge Assistant
 
-End-to-end **retrieval-augmented generation** over your own documents: upload PDFs, Word files, or plain text, build a local vector index, and ask questions in natural language. Answers are generated with **grounding instructions** so the model stays close to retrieved text, with **[SOURCE N]** citations and file metadata for transparency.
-
----
-
-## Overview
-
-This repository implements a full RAG pipeline in Python. Documents are loaded from disk, split into overlapping chunks with stable metadata, embedded with OpenAI, and stored in a **FAISS** index on your machine. At query time, your question is embedded with the **same model**, the index returns the most similar chunks, and a chat model answers using **only** that context. A **Streamlit** app ties the steps together so you can demo the flow without touching the command line.
-
-The codebase is split into small modules (ingestion, chunking, vector store, LLM layer, UI) so you can explain each stage clearly in interviews or extend one part without rewriting the rest.
+A chat-style assistant that answers **general questions** and, when you add your own **PDF, Word, or text files**, can ground replies in that material with **sources** and short **excerpts** so you can see what text was used.
 
 ---
 
-## Key Features
+## Key features
 
-- **Ingestion** for **PDF** (pdfplumber), **DOCX** (python-docx), and **TXT**, with metadata such as source file, path, file type, and page number for PDFs where available  
-- **Chunking** via LangChain’s `RecursiveCharacterTextSplitter`, with configurable size and overlap  
-- **Embeddings** through OpenAI (`text-embedding-3-small` by default) and **langchain-openai**  
-- **Local FAISS index** saved under `data/indexes/`, reloadable across sessions  
-- **Top-*k* retrieval** with **L2 distance** scores for debugging and ordering  
-- **Grounded generation**: strict prompts, low temperature, and explicit handling when retrieval is empty or the answer is not in context  
-- **Streamlit UI**: save uploads to `data/raw/`, build or rebuild the index, ask questions, and inspect answers, sources, and chunk previews  
+- **Chat-first interface** (Streamlit): conversation, optional file attachments above the input, and a simple empty state with suggested prompts.
+- **Smart routing**: with no documents, or when retrieval does not match well, you get a normal assistant reply (no fake citations). When retrieval is strong, answers follow your files and show source references.
+- **Local document pipeline**: files are chunked, embedded with OpenAI, and stored in a **FAISS** index on your machine under `data/indexes/`.
+- **Transparent grounded answers**: optional collapsible **Sources** and **Supporting excerpts** for document-backed replies.
+- **Configurable behavior** (sidebar): sources per answer, context length, and overlap, with sensible defaults out of the box.
 
 ---
 
-## Architecture / Workflow
+## How it works (simple)
 
-The pipeline runs in this order:
+1. You type a message (and optionally attach files). New files are saved and indexed for your library.
+2. Your question is turned into an embedding and compared to chunks from your files.
+3. If the best matches are strong enough, the model answers using only those passages and cites them. Otherwise you get a general answer, the same as when you have no files or the question is not about your documents.
 
-1. **Ingestion** - Files in `data/raw/` are read; text is extracted and normalized into structured segments (e.g. one record per non-empty PDF page or one per TXT/DOCX file).  
-2. **Chunking** - Each segment is split into smaller overlapping pieces. Every chunk keeps ingestion metadata plus `chunk_id`, `chunk_index`, and `total_chunks` for that segment.  
-3. **Embedding** - Chunk text is sent to the OpenAI embeddings API; vectors are built with the same settings used later for queries.  
-4. **FAISS** - Vectors and LangChain `Document` objects (text + metadata) are stored in a FAISS index and written to disk (`*.faiss` + `*.pkl`).  
-5. **Retrieval** - The user question is embedded; FAISS returns the top-*k* nearest chunks and their metadata and distances.  
-6. **LLM** - Retrieved chunks are formatted as numbered **[SOURCE 1], [SOURCE 2], …** blocks; the chat model answers using only that text and is instructed to cite sources or say it cannot answer from the documents.  
-7. **UI** - Streamlit orchestrates upload, index build, question submission, and display of the answer, source list, and optional chunk previews.  
+No web search: answers come from the model and, when grounded, from the text you uploaded.
 
 ---
 
-## Tech Stack
+## Architecture (high level)
 
-| Area | Technology |
-|------|------------|
-| Language | Python 3.11+ (3.12 recommended) |
+| Stage | What happens |
+|--------|----------------|
+| **Ingestion** | PDFs, DOCX, and TXT are read from `data/raw/` and normalized with metadata (e.g. page hints for PDFs). |
+| **Chunking** | Text is split into overlapping segments with stable IDs for traceability. |
+| **Indexing** | Chunks are embedded and stored in a FAISS vector index on disk. |
+| **Query** | The user message is embedded; nearest chunks are retrieved and scored. |
+| **Generation** | Either a general chat completion or a **grounded** completion that only uses labeled context blocks for citations. |
+
+The UI and routing live in `streamlit_app.py`. Ingestion, chunking, retrieval, and LLM helpers are organized under `app/`.
+
+---
+
+## Tech stack
+
+| Layer | Choices |
+|--------|---------|
+| Language | Python 3.11+ |
 | UI | Streamlit |
-| LLM & embeddings | OpenAI API, `langchain-openai` |
-| Orchestration | LangChain (documents, text splitters, vector store integration) |
-| Vector store | FAISS (`faiss-cpu`), `langchain-community` |
-| PDF / Word | pdfplumber, python-docx |
-| Configuration | python-dotenv |
+| Models | OpenAI (chat + embeddings) via LangChain |
+| Vectors | FAISS (`faiss-cpu`), local files |
+| Documents | pdfplumber, python-docx |
+| Config | `python-dotenv` |
 
 ---
 
-## Project Structure
+## Run locally
 
-```text
-rag-document-retrieval/
-├── streamlit_app.py              # Full RAG UI
-├── requirements.txt
-├── .env.example                  # Template for OPENAI_API_KEY
-├── README.md
-├── app/
-│   ├── config.py                 # Loads API key from environment
-│   ├── ingestion/
-│   │   ├── loader.py             # PDF, DOCX, TXT loading
-│   │   └── __init__.py
-│   ├── utils/
-│   │   ├── chunker.py            # TextChunk + chunk_ingested_documents
-│   │   └── __init__.py
-│   ├── retrieval/
-│   │   ├── vector_store.py       # Embeddings, FAISS, retrieve_top_k, RetrievedChunk
-│   │   └── __init__.py
-│   └── llm/
-│       ├── generator.py          # GroundedAnswer, generate_grounded_answer
-│       └── __init__.py
-├── data/
-│   ├── raw/                      # Input documents (typically gitignored)
-│   └── indexes/                  # Saved FAISS store (typically gitignored)
-└── tests/
+**Prerequisites:** Python 3.11+, an [OpenAI API key](https://platform.openai.com/).
+
+```bash
+git clone <your-repo-url>
+cd rag-document-retrieval
+python -m venv .venv
 ```
 
----
+Activate the environment:
 
-## Setup Instructions
+- **Windows (PowerShell):** `.\.venv\Scripts\Activate.ps1`
+- **macOS / Linux:** `source .venv/bin/activate`
 
-1. Clone the repository and open a terminal at the project root (`rag-document-retrieval`).
+```bash
+pip install -r requirements.txt
+cp .env.example .env          # Windows: copy .env.example .env
+```
 
-2. Create and activate a virtual environment:
+Put your key in `.env`:
 
-   ```bash
-   python -m venv .venv
-   ```
+```env
+OPENAI_API_KEY=sk-...
+```
 
-   **Windows (PowerShell):**
-
-   ```powershell
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-   **macOS / Linux:**
-
-   ```bash
-   source .venv/bin/activate
-   ```
-
-3. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Copy `.env.example` to `.env` and set your OpenAI key:
-
-   ```env
-   OPENAI_API_KEY=sk-...
-   ```
-
-5. Ensure `data/raw/` and `data/indexes/` exist (the app creates them as needed).
-
----
-
-## How to Run
-
-Always run commands from the **project root** so imports resolve.
-
-**Start the app:**
+Start the app from the project root:
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
-Streamlit prints a local URL; open it in your browser.
-
-**Optional module checks (same root):**
-
-```bash
-python -m app.ingestion.loader
-python -m app.utils.chunker
-python -m app.retrieval.vector_store
-python -m app.llm.generator
-```
-
----
-
-## How to Use
-
-1. In the browser, use **Choose files** to pick PDF, DOCX, or TXT files, then click **Save uploaded files to data/raw**.  
-2. In the sidebar, set **chunk size**, **chunk overlap**, and **top *k*** if you want values other than the defaults.  
-3. Click **Build / Rebuild Index**. This ingests everything in `data/raw/`, chunks, calls the embeddings API, and saves FAISS under `data/indexes/`.  
-4. Type a question and click **Ask Question**. The app loads the index, retrieves top-*k* chunks, runs grounded generation, and shows the answer.  
-5. Expand **[SOURCE *N*]** rows to see `chunk_id`, file name, page, and path; scroll to **retrieved chunk previews** to see what text was retrieved and its distance score.  
-
-Rebuild the index after you add or replace documents so vectors match your library.
-
----
-
-## Example Workflow
-
-You save a two-page internal FAQ as a PDF into `data/raw/`, build the index, then ask: *“What is the refund policy?”* The app retrieves the chunks whose embeddings are closest to that question, passes them to the model as **[SOURCE 1]** and **[SOURCE 2]**, and returns a short answer that cites those labels. You confirm the cited passages actually appear in the FAQ PDF. If nothing relevant is in the index, the model is instructed to say it cannot answer from the provided documents.
-
----
-
-## Grounding and Citations
-
-Retrieved chunks are injected into the prompt as labeled blocks: **[SOURCE 1]**, **[SOURCE 2]**, and so on. Each block includes metadata lines (chunk id, file name, path, page) and a **Text:** section that is the only part the model is told to treat as evidence.
-
-The UI lists the same chunks as structured **sources** (aligned with those numbers). The model is asked to cite **[SOURCE *N*]** when it uses a passage and to give a fixed *cannot answer* response if the text does not support an answer. That reduces hallucinations but is not mathematically guaranteed; production systems still need review, evaluation, and monitoring.
+Open the URL shown in the terminal (typically `http://localhost:8501`).
 
 ---
 
 ## Screenshots
 
-Replace these with your own images after you capture the UI:
+Add images under `docs/images/` and drop them into the table when you publish the repo.
 
-| Screen | Placeholder |
-|--------|-------------|
-| Upload & save to `data/raw/` | `docs/images/01-upload.png` |
-| Build / Rebuild Index (spinner + success) | `docs/images/02-index-build.png` |
-| Answer, sources, and chunk previews | `docs/images/03-answer-sources.png` |
+| | File (suggested) | Caption |
+|---|------------------|---------|
+| 1 | `docs/images/01-empty-state.png` | Empty state with title, short value line, and starter prompts. |
+| 2 | `docs/images/02-chat-general.png` | General question: plain reply, no source panels. |
+| 3 | `docs/images/03-upload-and-ask.png` | Files attached, user message, assistant reply. |
+| 4 | `docs/images/04-grounded-answer.png` | Grounded reply with Sources / Supporting excerpts (collapsed). |
+| 5 | `docs/images/05-sidebar.png` | Sidebar: library list, New chat, options, About. |
 
----
-
-## Future Improvements
-
-- Hybrid retrieval (keyword + dense) and a reranker on top of top-*k* results  
-- Automated tests and a small golden set for retrieval and answer faithfulness  
-- Docker image and Streamlit Cloud deployment with secrets management  
-- OCR or a dedicated pipeline for scanned PDFs  
-- Optional async embedding and clearer progress for large folders  
+*Tip: one shot with the sidebar closed (chat-focused) and one with it open (library visible) works well for README readers.*
 
 ---
 
-## Interview Talking Points
+## Why this project is useful
 
-- **What problem RAG solves:** The model’s weights are static; RAG grounds answers in **your** documents that were not in training.  
-- **Why chunk:** Embeddings and context windows work on bounded spans; overlap helps when an answer sits across a split.  
-- **Why FAISS:** Fast similarity search locally without running a separate vector database for an MVP.  
-- **Why the same embedding model for index and query:** Vector dimension and geometry must match; mixing models breaks retrieval.  
-- **What top-*k* trades off:** Higher *k* adds context but also noise and cost; lower *k* can miss relevant passages.  
-- **How you explain grounding:** The LLM only sees retrieved text in numbered blocks and is instructed not to use outside knowledge; citations tie claims back to chunks you can audit.  
-- **Honest limitation:** Prompting improves faithfulness but is not a formal guarantee; evals and human review still matter.  
+- **Learning and interviews:** A small, readable RAG pipeline (ingest → chunk → embed → retrieve → generate) that you can explain end-to-end without a separate vector database.
+- **Portfolio:** Demonstrates practical LLM usage: grounded prompts, citations, and honest fallbacks when retrieval is weak.
+- **Real workflows:** Fits note-taking, policies, study material, or internal docs where **your** text is the source of truth, not the open web.
+
+---
+
+## Repository layout
+
+```text
+rag-document-retrieval/
+├── streamlit_app.py       # UI and query routing
+├── requirements.txt
+├── .env.example
+├── app/                   # ingestion, chunking, retrieval, LLM
+├── data/raw/              # uploaded documents (often gitignored)
+├── data/indexes/          # FAISS index files (often gitignored)
+└── docs/images/           # screenshots (optional)
+```
 
 ---
 
 ## License
 
-Specify a license (for example MIT) when you publish the repository, or retain default copyright until you add a `LICENSE` file.
+Add a `LICENSE` file when you make the repository public (for example MIT).

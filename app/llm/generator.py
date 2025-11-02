@@ -21,7 +21,23 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
+# FAISS L2 distance on retrieved chunks: lower is closer. Above this, treat as weak match.
+USEFUL_RETRIEVAL_MAX_L2 = 1.25
+
 UNKNOWN_PHRASE = "I don't know based on the provided documents."
+
+GENERAL_ASSISTANT_PROMPT = """You are the assistant in a chat app. Reply in a clear, friendly tone.
+
+How to write:
+- Answer the user's message directly. Prefer short paragraphs; use a short bullet list only when it improves clarity (steps, options, or multiple items).
+- Be concise by default; add detail only when the question needs it.
+- Use plain language. Light Markdown is fine (e.g. **bold** for a key term); avoid heavy formatting.
+
+Do not:
+- Add citations, source numbers, [SOURCE n], or phrases like "according to your documents" or "based on the file you uploaded". This turn has no document context.
+- Invent that you read specific files or quoted material.
+
+If you are unsure or the question is outside your knowledge, say so briefly and suggest what would help (e.g. rephrase, add constraints)."""
 
 GROUNDING_SYSTEM_PROMPT = f"""You are a precise assistant for document Q&A.
 
@@ -88,6 +104,17 @@ def chunks_to_source_refs(chunks: list[RetrievedChunk]) -> tuple[SourceRef, ...]
     return tuple(refs)
 
 
+# Cap per-chunk text in the prompt for lower latency and token cost (UI unchanged).
+_MAX_CONTEXT_CHARS_PER_CHUNK = 3200
+
+
+def _truncate_chunk_text(text: str, max_chars: int = _MAX_CONTEXT_CHARS_PER_CHUNK) -> str:
+    t = (text or "").strip()
+    if len(t) <= max_chars:
+        return t
+    return t[: max_chars - 1].rstrip() + "..."
+
+
 def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
     """
     Turn retrieved chunks into numbered context blocks the model must stay within.
@@ -100,13 +127,14 @@ def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
     blocks: list[str] = []
     for i, h in enumerate(chunks, start=1):
         m = h.metadata
+        body = _truncate_chunk_text(h.page_content)
         blocks.append(
             f"[SOURCE {i}]\n"
             f"chunk_id: {_meta_str(m, 'chunk_id')}\n"
             f"source_name: {_meta_str(m, 'source_name')}\n"
             f"file_path: {_meta_str(m, 'file_path')}\n"
             f"page_number: {_normalize_page_label(m)}\n"
-            f"Text:\n{h.page_content.strip()}"
+            f"Text:\n{body}"
         )
     return "\n\n---\n\n".join(blocks)
 
@@ -141,13 +169,66 @@ def create_chat_llm(
     *,
     model: str = DEFAULT_CHAT_MODEL,
     temperature: float = 0.0,
+    max_tokens: int | None = None,
 ) -> ChatOpenAI:
     """Chat model for RAG answers (temperature 0 by default for faithfulness)."""
-    return ChatOpenAI(
-        model=model,
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "api_key": get_openai_api_key(),
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return ChatOpenAI(**kwargs)
+
+
+# Keeps general-chat replies tight for the UI (lower latency vs very long completions).
+_GENERAL_ANSWER_MAX_TOKENS = 600
+
+# Caps grounded completion length; answers stay citation-focused.
+_GROUNDED_ANSWER_MAX_TOKENS = 1200
+
+
+def generate_general_answer(
+    query: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+    temperature: float = 0.35,
+) -> str:
+    """
+    Plain assistant reply without retrieved context or citations.
+    Same OpenAI chat stack as grounded answers; tuned for concise, natural chat.
+    """
+    if not query.strip():
+        raise ValueError("Query must be non-empty.")
+
+    model = create_chat_llm(
+        model=chat_model,
         temperature=temperature,
-        api_key=get_openai_api_key(),
+        max_tokens=_GENERAL_ANSWER_MAX_TOKENS,
     )
+    messages = [
+        SystemMessage(content=GENERAL_ASSISTANT_PROMPT),
+        HumanMessage(content=query.strip()),
+    ]
+    logger.info("Calling chat model for general answer (no retrieval)")
+    response = model.invoke(messages)
+    out = _coerce_text_content(response.content).strip()
+    return out if out else "I don't have a response right now."
+
+
+def retrieval_is_useful(
+    hits: list[RetrievedChunk],
+    *,
+    max_l2_distance: float = USEFUL_RETRIEVAL_MAX_L2,
+) -> bool:
+    """
+    Simple gate for whether to use document grounding: need at least one hit whose
+    FAISS L2 distance is at or below the threshold (best hit is hits[0]).
+    """
+    if not hits:
+        return False
+    return float(hits[0].distance) <= float(max_l2_distance)
 
 
 def generate_grounded_answer(
@@ -179,7 +260,11 @@ def generate_grounded_answer(
 
     context_block = format_context_for_prompt(retrieved_chunks)
     messages = build_grounded_messages(query, context_block)
-    model = llm or create_chat_llm(model=chat_model, temperature=temperature)
+    model = llm or create_chat_llm(
+        model=chat_model,
+        temperature=temperature,
+        max_tokens=_GROUNDED_ANSWER_MAX_TOKENS,
+    )
 
     logger.info("Calling chat model for grounded answer (%s chunk(s) in context)", len(retrieved_chunks))
     response = model.invoke(messages)
