@@ -1,0 +1,40 @@
+# Local / demo full stack: API + Next.js. Copy .env.example → .env and set OPENAI_API_KEY.
+#
+#   docker compose up --build
+#
+# UI: http://localhost:3000  |  API: http://localhost:8000  |  Health: http://localhost:8000/health
+#
+# Browser calls the API via NEXT_PUBLIC_API_URL (must match how you open the site).
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      KA_ENV: production
+      PYTHONPATH: /app
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
