@@ -20,6 +20,23 @@ class Settings:
     default_top_k: int
 
 
+def get_cors_allow_origins() -> list[str]:
+    """
+    Origins allowed for browser clients (Next.js dev server, etc.).
+
+    ``KA_CORS_ORIGINS`` is a comma-separated list. If unset, defaults cover
+    local Next.js on common hosts. Do not use ``*`` with ``allow_credentials=True``.
+    """
+    raw = os.environ.get("KA_CORS_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://[::1]:3000",
+    ]
+
+
 @lru_cache
 def get_settings() -> Settings:
     raw = Path(os.environ.get("KA_RAW_DIR", str(get_default_raw_dir()))).resolve()

@@ -137,10 +137,10 @@ def post_chat_stream(
 
     **Events**
 
-    - ``start`` — connection accepted (sent before retrieval / generation).
-    - ``token`` — ``data.delta`` is a text fragment (document, web, blended, or general).
-    - ``done`` — ``data.answer`` matches :class:`ChatResponse` JSON (mode, full text, sources, web_snippets, notes, warnings).
-    - ``error`` — ``data.detail`` describes the failure.
+    - ``start``: connection accepted (sent before retrieval / generation).
+    - ``token``: ``data.delta`` is a text fragment (document, web, blended, or general).
+    - ``done``: ``data.answer`` matches :class:`ChatResponse` JSON (mode, full text, sources, web_snippets, notes, warnings).
+    - ``error``: ``data.detail`` describes the failure.
 
     Temporarily clears ``KA_NO_STREAM`` if set so token iterators are used.
     """

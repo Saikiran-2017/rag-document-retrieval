@@ -41,7 +41,7 @@ class SyncResponse(BaseModel):
     status: Literal["success", "unchanged", "failed"]
     message: str = ""
     vector_count: int = 0
-    """``unchanged`` | ``rebuilt`` | ``failed`` — mirrors :func:`app.services.index_service.rebuild_knowledge_index` action."""
+    """``unchanged`` | ``rebuilt`` | ``failed``; mirrors :func:`app.services.index_service.rebuild_knowledge_index` action."""
     sync_action: str = "failed"
     content_fingerprint: list[list[str]] | None = None
 
