@@ -2,7 +2,7 @@
 
 export const APP_NAME = "Knowledge Assistant";
 export const EMPTY_STATE_VALUE_PROP =
-  "Chat normally—when your library applies, answers cite your files.";
+  "Chat normally. When your library applies, answers cite your files.";
 export const HERO_BEST_FOR =
   "Best for a focused set of files. Works without uploads. Complements your other AI tools.";
 export const SIDEBAR_CAPTION = "Upload, sync, ask.";

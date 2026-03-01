@@ -18,11 +18,55 @@ function apiUrl(path: string): string {
   return `${getApiBase()}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** Human-readable message from FastAPI / JSON error bodies. */
+export function formatApiErrorBody(data: unknown): string {
+  if (data == null || typeof data !== "object") {
+    return "Request failed";
+  }
+  const d = data as Record<string, unknown>;
+  if (typeof d.message === "string" && d.message.trim()) {
+    return d.message;
+  }
+  const detail = d.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const parts = detail.map((x) => {
+      if (x && typeof x === "object" && "msg" in x) {
+        return String((x as { msg?: string }).msg ?? x);
+      }
+      return String(x);
+    });
+    return parts.join("; ") || "Request failed";
+  }
+  return "Request failed";
+}
+
+async function readErrorBody(r: Response): Promise<string> {
+  try {
+    const data: unknown = await r.json();
+    return formatApiErrorBody(data);
+  } catch {
+    return `HTTP ${r.status}`;
+  }
+}
+
+/** Lightweight connectivity check (no auth). */
+export async function checkApiHealth(): Promise<boolean> {
+  try {
+    const r = await fetch(apiUrl("/health"), { cache: "no-store" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function listChats(limit = 40): Promise<ChatSessionRow[]> {
   const r = await fetch(apiUrl(`/api/v1/chats?limit=${limit}`), {
     cache: "no-store",
   });
-  if (!r.ok) throw new Error(`List chats failed: ${r.status}`);
+  if (!r.ok) throw new Error(await readErrorBody(r));
   return r.json();
 }
 
@@ -31,7 +75,7 @@ export async function createChat(title = "New chat"): Promise<{ id: string; titl
     apiUrl(`/api/v1/chats?title=${encodeURIComponent(title)}`),
     { method: "POST" },
   );
-  if (!r.ok) throw new Error(`Create chat failed: ${r.status}`);
+  if (!r.ok) throw new Error(await readErrorBody(r));
   return r.json();
 }
 
@@ -39,15 +83,39 @@ export async function deleteChat(sessionId: string): Promise<void> {
   const r = await fetch(apiUrl(`/api/v1/chats/${sessionId}`), {
     method: "DELETE",
   });
-  if (!r.ok) throw new Error(`Delete chat failed: ${r.status}`);
+  if (!r.ok) throw new Error(await readErrorBody(r));
+}
+
+/** Normalize API message: supports nested ``extra`` or flat legacy shape. */
+export function normalizeMessageOut(raw: Record<string, unknown>): MessageOut {
+  const role = String(raw.role ?? "");
+  const content = String(raw.content ?? "");
+  const nested = raw.extra;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return {
+      role,
+      content,
+      extra: nested as Record<string, unknown>,
+    };
+  }
+  const skip = new Set(["role", "content", "extra"]);
+  const flat: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!skip.has(k)) flat[k] = v;
+  }
+  return { role, content, extra: flat };
 }
 
 export async function getMessages(sessionId: string): Promise<MessageOut[]> {
   const r = await fetch(apiUrl(`/api/v1/chats/${sessionId}/messages`), {
     cache: "no-store",
   });
-  if (!r.ok) throw new Error(`Load messages failed: ${r.status}`);
-  return r.json();
+  if (!r.ok) throw new Error(await readErrorBody(r));
+  const rows: unknown = await r.json();
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) =>
+    normalizeMessageOut(row && typeof row === "object" ? (row as Record<string, unknown>) : {}),
+  );
 }
 
 export async function appendMessage(
@@ -61,7 +129,7 @@ export async function appendMessage(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ role, content, extra }),
   });
-  if (!r.ok) throw new Error(`Save message failed: ${r.status}`);
+  if (!r.ok) throw new Error(await readErrorBody(r));
 }
 
 export async function setChatTitle(sessionId: string, title: string): Promise<void> {
@@ -70,32 +138,34 @@ export async function setChatTitle(sessionId: string, title: string): Promise<vo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
-  if (!r.ok) throw new Error(`Rename chat failed: ${r.status}`);
+  if (!r.ok) throw new Error(await readErrorBody(r));
 }
 
 export async function listDocuments(): Promise<{ documents: DocumentRow[]; count: number }> {
   const r = await fetch(apiUrl("/api/v1/documents"), { cache: "no-store" });
-  if (!r.ok) throw new Error(`List documents failed: ${r.status}`);
+  if (!r.ok) throw new Error(await readErrorBody(r));
   return r.json();
 }
 
-export async function syncLibrary(): Promise<{
+export interface SyncLibraryResult {
   ok: boolean;
   status: string;
   message: string;
   sync_action: string;
   vector_count: number;
-}> {
+}
+
+export async function syncLibrary(): Promise<SyncLibraryResult> {
   const r = await fetch(apiUrl("/api/v1/sync"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
   });
-  const data = await r.json();
+  const data: unknown = await r.json();
   if (!r.ok) {
-    throw new Error(data?.message || data?.detail || `Sync failed: ${r.status}`);
+    throw new Error(formatApiErrorBody(data));
   }
-  return data;
+  return data as SyncLibraryResult;
 }
 
 export async function uploadFiles(files: FileList | File[]): Promise<unknown> {
@@ -108,9 +178,9 @@ export async function uploadFiles(files: FileList | File[]): Promise<unknown> {
     method: "POST",
     body: fd,
   });
-  const data = await r.json();
+  const data: unknown = await r.json();
   if (!r.ok) {
-    throw new Error(data?.message || data?.detail || `Upload failed: ${r.status}`);
+    throw new Error(formatApiErrorBody(data));
   }
   return data;
 }
@@ -126,6 +196,8 @@ export function buildAssistantExtra(answer: ChatAnswer): Record<string, unknown>
   return ex;
 }
 
+export type StreamOutcome = "complete" | "aborted" | "incomplete";
+
 export async function postChatStream(
   message: string,
   taskMode: TaskMode,
@@ -135,30 +207,42 @@ export async function postChatStream(
     onDone: (answer: ChatAnswer) => void;
     onError: (detail: string) => void;
   },
-): Promise<void> {
-  const r = await fetch(apiUrl("/api/v1/chat/stream"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message, task_mode: taskMode, summarize_scope: "all" }),
-    signal,
-  });
+): Promise<StreamOutcome> {
+  let sawTerminal = false;
+  const markDone = (answer: ChatAnswer) => {
+    sawTerminal = true;
+    handlers.onDone(answer);
+  };
+  const markError = (detail: string) => {
+    sawTerminal = true;
+    handlers.onError(detail);
+  };
+
+  let r: Response;
+  try {
+    r = await fetch(apiUrl("/api/v1/chat/stream"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ message, task_mode: taskMode, summarize_scope: "all" }),
+      signal,
+    });
+  } catch (e) {
+    if (signal.aborted) return "aborted";
+    markError(e instanceof Error ? e.message : "Network error");
+    return "complete";
+  }
+
+  if (signal.aborted) return "aborted";
 
   if (!r.ok) {
-    let t = `HTTP ${r.status}`;
-    try {
-      const j = await r.json();
-      t = j.detail || j.message || t;
-    } catch {
-      /* ignore */
-    }
-    handlers.onError(t);
-    return;
+    markError(await readErrorBody(r));
+    return "complete";
   }
 
   const reader = r.body?.getReader();
   if (!reader) {
-    handlers.onError("No response body");
-    return;
+    markError("No response body");
+    return "complete";
   }
 
   const dec = new TextDecoder();
@@ -187,16 +271,17 @@ export async function postChatStream(
     }
     if (ev === "done" || typ === "done") {
       const ans = payload.answer as ChatAnswer | undefined;
-      if (ans) handlers.onDone(ans);
+      if (ans) markDone(ans);
       return;
     }
     if (ev === "error" || typ === "error") {
-      handlers.onError(String(payload.detail ?? "Unknown error"));
+      markError(String(payload.detail ?? "Unknown error"));
     }
   };
 
   try {
     for (;;) {
+      if (signal.aborted) return "aborted";
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
@@ -210,4 +295,8 @@ export async function postChatStream(
   } finally {
     reader.releaseLock();
   }
+
+  if (signal.aborted) return "aborted";
+  if (!sawTerminal) return "incomplete";
+  return "complete";
 }

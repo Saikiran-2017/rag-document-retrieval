@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Knowledge Assistant",
   description:
-    "Chat with your documents—when your library applies, answers cite your files.",
+    "Chat with your documents. When your library applies, answers cite your files.",
 };
 
 export default function RootLayout({

@@ -3,14 +3,85 @@
 @tailwind utilities;
 
 :root {
-  --ka-bg: #fafaf9;
+  --ka-bg: #f5f5f4;
   --ka-surface: #ffffff;
-  --background: #fafaf9;
-  --foreground: #1c1917;
+  --ka-elevated: #fafaf9;
+  --ka-border: #e7e5e4;
+  --ka-border-subtle: #f5f5f4;
+  --ka-muted: #78716c;
+  --ka-fg: #1c1917;
+  --ka-fg-soft: #44403c;
+  --background: var(--ka-bg);
+  --foreground: var(--ka-fg);
 }
 
-body {
-  color: var(--foreground);
-  background: var(--ka-bg);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    color: var(--foreground);
+    background: var(--ka-bg);
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: rgb(214 211 209 / 0.55);
+  }
+}
+
+@layer utilities {
+  .ka-text-balance {
+    text-wrap: balance;
+  }
+
+  .ka-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgb(245 245 244) 0%,
+      rgb(231 229 228) 50%,
+      rgb(245 245 244) 100%
+    );
+    background-size: 200% 100%;
+    animation: ka-shimmer-move 1.2s ease-in-out infinite;
+  }
+
+  @keyframes ka-shimmer-move {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: -100% 0;
+    }
+  }
+
+  .ka-stream-dots span {
+    animation: ka-dot 1.2s ease-in-out infinite;
+  }
+  .ka-stream-dots span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .ka-stream-dots span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes ka-dot {
+    0%,
+    60%,
+    100% {
+      opacity: 0.25;
+    }
+    30% {
+      opacity: 1;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ka-shimmer,
+  .ka-stream-dots span {
+    animation: none !important;
+  }
 }

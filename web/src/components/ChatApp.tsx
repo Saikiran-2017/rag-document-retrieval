@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   appendMessage,
   buildAssistantExtra,
+  checkApiHealth,
   createChat,
   deleteChat,
-  getMessages,
   getApiBase,
+  getMessages,
   listChats,
   listDocuments,
   postChatStream,
@@ -15,14 +16,18 @@ import {
   syncLibrary,
   uploadFiles,
 } from "@/lib/api";
+import { loadInitialChatSessions } from "@/lib/bootstrap";
 import { mapMessages } from "@/lib/messages";
 import type { ChatAnswer, ChatSessionRow, DocumentRow, TaskMode, UiMessage } from "@/lib/types";
+import { AppLoadingShell } from "@/components/AppLoadingShell";
+import { ChatSkeleton } from "@/components/ChatSkeleton";
 import { ChatThread } from "@/components/ChatThread";
 import { Composer } from "@/components/Composer";
 import { EmptyHero } from "@/components/EmptyHero";
-import { Sidebar } from "@/components/Sidebar";
+import { MobileNavBar, Sidebar } from "@/components/Sidebar";
 
 const STORAGE_KEY = "ka_web_active_chat";
+const SKELETON_DELAY_MS = 220;
 
 function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -50,6 +55,9 @@ export function ChatApp() {
   const [uploadHint, setUploadHint] = useState<string | null>(null);
   const [syncHint, setSyncHint] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [showThreadSkeleton, setShowThreadSkeleton] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -72,12 +80,15 @@ export function ChatApp() {
     let cancelled = false;
     (async () => {
       try {
-        let list = await listChats();
+        const reachable = await checkApiHealth();
         if (cancelled) return;
-        if (list.length === 0) {
-          await createChat();
-          list = await listChats();
+        if (!reachable) {
+          setBanner(
+            `API not reachable at ${getApiBase()}. Start the backend (uvicorn) and set NEXT_PUBLIC_API_URL if needed.`,
+          );
+          return;
         }
+        const list = await loadInitialChatSessions();
         if (cancelled) return;
         setSessions(list);
         const stored = localStorage.getItem(STORAGE_KEY);
@@ -89,7 +100,7 @@ export function ChatApp() {
         setBanner(
           e instanceof Error
             ? e.message
-            : "Could not reach the API. Start the backend and set NEXT_PUBLIC_API_URL.",
+            : "Could not load chats. Check the backend and NEXT_PUBLIC_API_URL.",
         );
       } finally {
         if (!cancelled) setReady(true);
@@ -106,6 +117,9 @@ export function ChatApp() {
     let cancelled = false;
     abortRef.current?.abort();
     abortRef.current = null;
+    setMessages([]);
+    setThreadLoading(true);
+
     (async () => {
       try {
         const rows = await getMessages(activeSessionId);
@@ -113,6 +127,8 @@ export function ChatApp() {
         setMessages(mapMessages(rows));
       } catch {
         if (!cancelled) setMessages([]);
+      } finally {
+        if (!cancelled) setThreadLoading(false);
       }
     })();
     localStorage.setItem(STORAGE_KEY, activeSessionId);
@@ -120,6 +136,15 @@ export function ChatApp() {
       cancelled = true;
     };
   }, [activeSessionId, ready]);
+
+  useEffect(() => {
+    if (!threadLoading) {
+      setShowThreadSkeleton(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShowThreadSkeleton(true), SKELETON_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [threadLoading]);
 
   const selectChat = (id: string) => {
     abortRef.current?.abort();
@@ -206,6 +231,7 @@ export function ChatApp() {
     try {
       await appendMessage(sid, "user", q, {});
     } catch (e) {
+      setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
       setBanner(e instanceof Error ? e.message : "Could not save message");
       return;
     }
@@ -236,7 +262,7 @@ export function ChatApp() {
     const ac = new AbortController();
     abortRef.current = ac;
 
-    await postChatStream(q, taskMode, ac.signal, {
+    const outcome = await postChatStream(q, taskMode, ac.signal, {
       onToken: (delta) => {
         setMessages((prev) =>
           prev.map((m) =>
@@ -287,52 +313,94 @@ export function ChatApp() {
         abortRef.current = null;
       },
     });
+
+    if (outcome === "incomplete") {
+      setStreaming(false);
+      abortRef.current = null;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== assistId || m.role !== "assistant") return m;
+          const c = m.content.trim();
+          return {
+            ...m,
+            streaming: false,
+            content: c || "The reply did not finish. Try sending again.",
+          };
+        }),
+      );
+      setBanner("The reply did not finish. Check your connection and try again.");
+    }
   };
 
   if (!ready) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-[var(--ka-bg)] text-sm text-stone-500">
-        Loading…
-      </div>
-    );
+    return <AppLoadingShell />;
   }
 
+  const mainBody = threadLoading ? (
+    showThreadSkeleton ? (
+      <ChatSkeleton />
+    ) : (
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-3 py-24"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="ka-shimmer h-1.5 w-24 rounded-full opacity-70" />
+        <p className="text-xs text-stone-400">Loading conversation…</p>
+      </div>
+    )
+  ) : messages.length === 0 ? (
+    <EmptyHero onPickPrompt={sendMessage} disabled={streaming || !activeSessionId} />
+  ) : (
+    <ChatThread messages={messages} />
+  );
+
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--ka-bg)] text-stone-900">
-      <Sidebar
-        sessions={sessions}
-        activeId={activeSessionId}
-        documents={documents}
-        busy={busy || streaming}
-        onSelectChat={selectChat}
-        onNewChat={handleNewChat}
-        onDeleteChat={handleDeleteChat}
-        onUpload={handleUpload}
-        onSync={handleSync}
-        uploadHint={uploadHint}
-        syncHint={syncHint}
-      />
-      <main className="flex min-w-0 flex-1 flex-col">
-        {banner ? (
-          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
-            {banner}
-            <span className="ml-2 text-xs text-stone-500">({getApiBase()})</span>
-          </div>
-        ) : null}
-        <div className="flex min-h-0 flex-1 flex-col">
-          {messages.length === 0 ? (
-            <EmptyHero onPickPrompt={sendMessage} disabled={streaming || !activeSessionId} />
-          ) : (
-            <ChatThread messages={messages} />
-          )}
-        </div>
-        <Composer
-          onSend={sendMessage}
-          disabled={streaming || busy || !activeSessionId}
-          taskMode={taskMode}
-          onTaskModeChange={setTaskMode}
+    <>
+      {menuOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-stone-900/20 backdrop-blur-[1px] lg:hidden"
+          aria-label="Close menu"
+          onClick={() => setMenuOpen(false)}
         />
-      </main>
-    </div>
+      ) : null}
+      <MobileNavBar menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((o) => !o)} />
+      <div className="flex h-[100dvh] overflow-hidden bg-[var(--ka-bg)] text-stone-900">
+        <Sidebar
+          sessions={sessions}
+          activeId={activeSessionId}
+          documents={documents}
+          busy={busy || streaming}
+          mobileOpen={menuOpen}
+          onMobileClose={() => setMenuOpen(false)}
+          onSelectChat={selectChat}
+          onNewChat={handleNewChat}
+          onDeleteChat={handleDeleteChat}
+          onUpload={handleUpload}
+          onSync={handleSync}
+          uploadHint={uploadHint}
+          syncHint={syncHint}
+        />
+        <main className="flex min-w-0 flex-1 flex-col pt-12 lg:pt-0">
+          {banner ? (
+            <div className="border-b border-amber-200/90 bg-amber-50/95 px-4 py-2.5 text-center text-sm leading-snug text-amber-950 backdrop-blur-sm">
+              <span>{banner}</span>
+              <span className="mt-0.5 block text-xs font-normal text-stone-500 lg:inline lg:mt-0 lg:ml-2">
+                ({getApiBase()})
+              </span>
+            </div>
+          ) : null}
+          <div className="flex min-h-0 flex-1 flex-col">{mainBody}</div>
+          <Composer
+            onSend={sendMessage}
+            disabled={streaming || busy || !activeSessionId}
+            isStreaming={streaming}
+            taskMode={taskMode}
+            onTaskModeChange={setTaskMode}
+          />
+        </main>
+      </div>
+    </>
   );
 }
