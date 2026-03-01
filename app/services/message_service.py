@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_NAME = "Knowledge Assistant"
 # First-screen value prop (also used where TAGLINE was referenced).
-EMPTY_STATE_VALUE_PROP = "Chat normally—when your library applies, answers cite your files."
+EMPTY_STATE_VALUE_PROP = "Chat normally. When your library applies, answers cite your files."
 TAGLINE = EMPTY_STATE_VALUE_PROP
 SIDEBAR_CAPTION = "Upload, sync, ask."
 
@@ -16,12 +16,12 @@ HERO_BEST_FOR = (
     "Best for a focused set of files. Works without uploads. Complements your other AI tools."
 )
 
-# Sidebar positioning (modest, factual; no product names as endorsements—examples only where needed).
+# Sidebar positioning (modest, factual; no product names as endorsements; examples only where needed).
 WHY_THIS_WORKSPACE_MD = """
 - When retrieval applies, answers use **your uploaded documents**, not only the model's general knowledge.
 - Open **Sources** and **Supporting excerpts** under a reply to inspect what was used.
 - Fits a **defined file set** you already care about.
-- **Complements** tools like ChatGPT, Claude, or Copilot—not a substitute for every workflow.
+- **Complements** tools like ChatGPT, Claude, or Copilot, not a substitute for every workflow.
 """
 
 COMPARISON_MD = """
@@ -32,7 +32,7 @@ COMPARISON_MD = """
 | **Retrieval** | Flexible chat for varied tasks | **Corpus-focused** search over your synced files |
 | **Natural fit** | Open-ended use | **Document workflow**: upload → sync → ask |
 
-Neither column is "better" overall—they suit different jobs. Use this app when your own files should anchor the answer.
+Neither column is "better" overall; they suit different jobs. Use this app when your own files should anchor the answer.
 """
 PREVIEW_CHARS = 300
 # Sidebar UI: max value for "Sources per answer" (retrieval top_k).
@@ -68,7 +68,7 @@ DOC_HEALTH_COULD_NOT_READ_FILE = (
     "We couldn't read usable text from this file. Try PDF, Word, or plain text, or re-export the file."
 )
 DOC_HEALTH_NO_TEXT_EXTRACTED = (
-    "No text could be extracted. The file may be image-only or empty—try a text-based export if you can."
+    "No text could be extracted. The file may be image-only or empty; try a text-based export if you can."
 )
 DOC_HEALTH_INDEX_SECTIONS_MISMATCH = (
     "This file is saved, but search didn't match the text we extracted. Try Sync again."

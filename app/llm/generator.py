@@ -33,7 +33,7 @@ DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
 # FAISS L2 distance on retrieved chunks: lower is closer. Above this, treat as weak match.
 USEFUL_RETRIEVAL_MAX_L2 = 1.18
-# Hybrid (BM25 + vector + RRF): stricter gates — prefer web/general over weak doc grounding.
+# Hybrid (BM25 + vector + RRF): stricter gates; prefer web/general over weak doc grounding.
 _HYBRID_MAX_L2 = 1.02
 _HYBRID_MIN_RRF = 0.014
 _HYBRID_VERY_GOOD_L2 = 0.82
@@ -225,8 +225,8 @@ _DOCUMENT_TASK_MAX_TOKENS = 1200
 SUMMARIZE_SYSTEM_PROMPT = f"""You summarize text supplied only in [SOURCE N] blocks below. Evidence is ONLY the lines under "Text:" in each block.
 
 Output format (use Markdown):
-1. **Overview** — 2–4 sentences.
-2. **Key points** — bullet list (3–8 items when the material supports it).
+1. **Overview**: 2–4 sentences.
+2. **Key points**: bullet list (3–8 items when the material supports it).
 3. If the excerpts clearly do not cover the topic, say so in one short sentence (you may phrase like: {UNKNOWN_PHRASE}).
 
 Rules:
@@ -422,8 +422,8 @@ Rules:
 
 
 BLENDED_SYSTEM_PROMPT = f"""You answer using two evidence types that may both appear:
-1) Document passages under [SOURCE n] — Text: lines only.
-2) Web snippets under [WEB n] — Snippet: lines only.
+1) Document passages under [SOURCE n] - Text: lines only.
+2) Web snippets under [WEB n] - Snippet: lines only.
 
 Rules:
 - Prefer SOURCE passages for anything covered in your documents; do not duplicate the same fact from WEB when SOURCE already states it.

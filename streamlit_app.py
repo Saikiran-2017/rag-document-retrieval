@@ -404,7 +404,7 @@ def render_sources_expander(sources: list[dict[str, Any]]) -> None:
             sn = s.get("source_number", "?")
             st.markdown(
                 f'<p class="ka-src-line"><span class="ka-src-num">[{html.escape(str(sn))}]</span> '
-                f'<span class="ka-src-name">{html.escape(str(s.get("source_name", "") or "—"))}</span> '
+                f'<span class="ka-src-name">{html.escape(str(s.get("source_name", "") or "-"))}</span> '
                 f'<span class="ka-src-meta">&middot; p. {html.escape(str(s.get("page_label", "n/a")))}</span></p>',
                 unsafe_allow_html=True,
             )
@@ -442,7 +442,7 @@ def render_excerpts_expander(excerpts: list[dict[str, Any]]) -> None:
                 f'<p class="ka-ex-head">{html.escape(str(fn))} <span class="ka-ex-page">· p. {html.escape(str(pg))}</span></p>',
                 unsafe_allow_html=True,
             )
-            body = html.escape(str(p.get("preview_text") or "").strip() or "—")
+            body = html.escape(str(p.get("preview_text") or "").strip() or "-")
             st.markdown(f'<div class="ka-quote">{body}</div>', unsafe_allow_html=True)
 
 
@@ -497,7 +497,7 @@ def render_sidebar_positioning() -> None:
     with st.expander("Why this workspace", expanded=False):
         st.markdown(WHY_THIS_WORKSPACE_MD.strip())
     with st.expander("How this compares", expanded=False):
-        st.caption("Factual differences in focus—not a ranking of quality.")
+        st.caption("Factual differences in focus, not a ranking of quality.")
         st.markdown(COMPARISON_MD.strip())
 
 
@@ -1028,7 +1028,7 @@ st.markdown(
       transition: border-color 0.15s ease, background-color 0.15s ease;
     }
     .ka-empty-pad { height: 1.65rem; }
-    /* Streamlit “Dark” theme (Settings) — mirrors prefers-color-scheme dark tokens */
+    /* Streamlit “Dark” theme (Settings); mirrors prefers-color-scheme dark tokens */
     .stApp[data-theme="dark"] {
       --ka-text: rgba(248, 250, 252, 0.94);
       --ka-muted: rgba(248, 250, 252, 0.52);
