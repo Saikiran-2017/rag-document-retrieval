@@ -1,196 +1,103 @@
-# 🚀 Deployment Guide - Render
+# Deployment guide
 
-This guide walks you through deploying the RAG Document Retrieval System on **Render**.
-
----
-
-## Why Render?
-
-- ✅ **Native Streamlit support** - No serverless complications
-- ✅ **Persistent storage** - FAISS indexes survive restarts
-- ✅ **Python-ready** - Built for Python applications
-- ✅ **Free tier available** - Start with `free` plan ($0/month)
-- ✅ **Easy upgrades** - Scale to Starter ($7/month) when needed
+Practical options for hosting **Knowledge Assistant** in a portfolio-friendly way. The same RAG stack powers **Streamlit** and **FastAPI**; pick one primary surface for a free-tier demo, or run both.
 
 ---
 
-## Prerequisites
+## 1. Streamlit only (simplest live demo)
 
-1. ✅ GitHub repository with code (you have this: `Saikiran-2017/rag-document-retrieval`)
-2. ✅ OpenAI API key (from https://platform.openai.com/account/api-keys)
-3. ✅ Render account (free signup at https://render.com)
+Best when you want **one** deployable artifact and the original sidebar UX.
 
----
+**Platform example: Render**
 
-## Step-by-Step Deployment
+- **Build:** `pip install -r requirements.txt`
+- **Start:** `streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0 --server.enableCORS=false`
+- **Env:** `OPENAI_API_KEY`, `PYTHONUNBUFFERED=1`
 
-### **Step 1: Sign up on Render**
+This repo includes **`render.yaml`** as a starting point; adjust the start command to use Render’s `PORT` if you do not hard-code `10000`.
 
-1. Go to https://render.com
-2. Click **"Sign up"** → Choose **"GitHub"**
-3. Authorize Render to access your GitHub account
-4. Click **"Authorize render"**
-
-### **Step 2: Create a New Web Service**
-
-1. From your Render dashboard, click **"New +"** (top right) → **"Web Service"**
-2. Under "Connect a repository," find **`rag-document-retrieval`**
-3. Click **"Connect"**
-
-### **Step 3: Configure Deployment**
-
-Fill in the form:
-
-| Field | Value |
-|-------|-------|
-| **Name** | `rag-document-retrieval` |
-| **Environment** | `Python 3` |
-| **Region** | `Oregon` (or closest to you) |
-| **Branch** | `master` |
-| **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `streamlit run streamlit_app.py --server.port=10000 --server.address=0.0.0.0` |
-| **Plan** | `Free` (later upgrade to **Starter** at $7/month) |
-
-### **Step 4: Set Environment Variables**
-
-1. Scroll down to **"Environment"** section
-2. Click **"Add Environment Variable"**
-3. Add:
-   - **Key:** `OPENAI_API_KEY`
-   - **Value:** `sk-your-actual-openai-api-key-here`
-4. Also add:
-   - **Key:** `PYTHONUNBUFFERED`
-   - **Value:** `1`
-
-✅ Click **"Create Web Service"**
-
-Render will now build and deploy your app! ⏳ (takes 2-5 minutes)
+**Persistence:** Mount or use a **persistent disk** for `data/raw` and `data/indexes` (and optionally `data/chat_history.db` if you add shared DB paths later), or uploads re-index will reset on ephemeral disks.
 
 ---
 
-## Step 5: Access Your App
+## 2. FastAPI API (container or PaaS)
 
-Once deployment completes:
+**Docker (recommended pattern)**
 
-1. Render shows your app URL like: **`https://rag-document-retrieval.onrender.com`**
-2. Click it to open your Streamlit app! 🎉
-
----
-
-## After Deployment
-
-### **Using the App**
-
-1. **Upload Documents** → PDF, DOCX, or TXT files
-2. **Build Index** → Creates FAISS vectors (auto-saved)
-3. **Ask Questions** → Get grounded answers with citations
-
-### **Monitor Performance**
-
-- Click **"Logs"** to see app activity
-- Watch for API errors or memory issues
-- Monitor OpenAI API costs
-
-### **Upgrade to Starter (Optional)**
-
-Free tier sleeps after 15 min inactivity. For always-on:
-
-1. Go to **Settings** → **Plan** 
-2. Upgrade to **Starter ($7/month)**
-3. App stays running 24/7
-
----
-
-## Troubleshooting
-
-### **Deployment fails (Build Error)**
-
-```
-pip install -r requirements.txt fails
+```bash
+docker build -t ka-api .
+docker run --rm -p 8000:8000 --env-file .env -v "$(pwd)/data:/app/data" ka-api
 ```
 
-**Fix:** Check `requirements.txt` has all dependencies. Render uses `faiss-cpu` (good for cloud).
+- Set `OPENAI_API_KEY` and, for public browsers, **`KA_CORS_ORIGINS`** (your Next.js site URL, comma-separated).
+- Set **`KA_ENV=production`** to disable `/docs` and `/redoc` in public demos.
+- Use **one uvicorn worker** unless you externalize FAISS + SQLite to shared storage (current design is single-node).
 
-### **App crashes after deployment**
+**PaaS (Render / Fly.io / Railway / similar)**
 
-```
-Port 10000 not available / startup timeout
-```
+- **Build:** same as Dockerfile (`pip install …` or `docker build`).
+- **Start:** `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT --workers 1`
+- Attach a **volume** for `/app/data` if the platform supports it.
 
-**Fix:** Check logs in Render dashboard. Restart service: **Settings** → **Restart service**
-
-### **OpenAI API errors**
-
-```
-OPENAI_API_KEY not found
-```
-
-**Fix:** Verify in Render Settings → Environment that key is set correctly.
-
-### **Questions not working (slow retrieval)**
-
-- **Free tier issue:** App sleeps after 15 min
-- **Solution:** Upgrade to Starter or reload page within 15 min of last use
+**Health checks:** `GET /health`
 
 ---
 
-## Cost Estimate
+## 3. Next.js frontend (static + server)
 
-| Component | Cost |
-|-----------|------|
-| **Render** (Free tier) | $0/month |
-| **Render** (Starter) | $7/month |
-| **OpenAI Embeddings** | ~$0.02 per query |
-| **OpenAI Chat** | ~$0.01 per answer |
-| **Total for 100 queries/month** | $7 + $3 = $10/month |
+The UI reads **`NEXT_PUBLIC_API_URL`** at **build time** (it is inlined into the client bundle).
 
----
+**Vercel / Netlify (typical)**
 
-## Files Created for Deployment
+1. Create a project from `web/`.
+2. Set **environment variable** `NEXT_PUBLIC_API_URL` to your **public API origin** (e.g. `https://api.yourdomain.com`), no trailing slash.
+3. Build command: `npm run build` (from `web/`). Output: Next default.
 
-- ✅ **`render.yaml`** - Render configuration
-- ✅ **`.streamlit/config.toml`** - Streamlit cloud settings
-- ✅ **`requirements.txt`** - Updated with all dependencies
-
-All files are in your GitHub repo and will be automatically used by Render.
+**Backend CORS:** set `KA_CORS_ORIGINS` on the API to your frontend origin (e.g. `https://your-app.vercel.app`).
 
 ---
 
-## Share Your App
+## 4. Docker Compose (API + web together)
 
-Once deployed, you can:
-- 📱 **Share the URL** with interviewers
-- 🔗 **Add to your resume** as a live demo
-- 📊 **Show on LinkedIn** as a portfolio project
+From the **repository root**:
 
-Example resume entry:
-```
-RAG Document Retrieval System
-Live Demo: https://rag-document-retrieval.onrender.com
-GitHub: https://github.com/Saikiran-2017/rag-document-retrieval
+```bash
+cp .env.example .env
+# Edit .env (at minimum OPENAI_API_KEY)
 
-Built with Streamlit, LangChain, FAISS, OpenAI
-- Uploads PDF/DOCX/TXT documents
-- Builds semantic search indexes with embeddings
-- Generates grounded answers with source citations
-- Deployed on Render with persistent FAISS storage
+docker compose up --build
 ```
 
----
+- **Web:** http://localhost:3000  
+- **API:** http://localhost:8000  
 
-## Next Steps
+`./data` on the host is mounted into the API container for uploads, FAISS, and SQLite chat DB.
 
-1. ✅ Deploy app on Render
-2. ✅ Test with sample documents
-3. ✅ Add URL to portfolio projects
-4. ✅ Monitor costs for OpenAI API
-5. ✅ Share with interviewers as a live demo
+To change the API URL baked into the web image, edit **`docker-compose.yml`** `args.NEXT_PUBLIC_API_URL` and rebuild.
 
 ---
 
-## Questions?
+## 5. Checklist before you share a public URL
 
-Check Render documentation: https://render.com/docs
-Check Streamlit cloud guide: https://docs.streamlit.io/deploy
+- [ ] `OPENAI_API_KEY` set on the API host (never commit real keys).
+- [ ] `KA_CORS_ORIGINS` matches the **exact** browser origin of the Next app (scheme + host + port).
+- [ ] `NEXT_PUBLIC_API_URL` points to the **public** API URL users’ browsers can reach.
+- [ ] `KA_ENV=production` on the API if you do not want public OpenAPI docs.
+- [ ] Persistent disk (or acceptance of reset) for `data/` if demos should keep uploads across restarts.
 
-Happy deploying! 🚀
+---
+
+## 6. Cost and limits
+
+- **OpenAI:** embedding + chat usage per query and sync.
+- **Free tiers:** cold starts and sleep (e.g. Render free) affect first request latency.
+- **Portfolio:** a cold start is acceptable; document it in README or demo notes.
+
+---
+
+## References
+
+- [Render docs](https://render.com/docs)
+- [Streamlit deployment](https://docs.streamlit.io/deploy)
+- [Next.js deployment](https://nextjs.org/docs/app/building-your-application/deploying)
+- [FastAPI behind a proxy](https://fastapi.tiangolo.com/deployment/)

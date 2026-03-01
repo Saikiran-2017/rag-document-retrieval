@@ -5,12 +5,10 @@ services:
     region: oregon
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run streamlit_app.py --server.port=10000 --server.address=0.0.0.0 --server.enableCORS=false
+    startCommand: streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0 --server.enableCORS=false
     envVars:
       - key: OPENAI_API_KEY
         scope: run
         sync: false
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: PORT
-        value: "10000"
