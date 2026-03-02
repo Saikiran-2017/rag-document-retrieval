@@ -16,8 +16,8 @@ _DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 # Windows reserved device names (stem without extension).
 _WIN_RESERVED = frozenset(
     {"con", "prn", "aux", "nul"}
-    + [f"com{i}" for i in range(1, 10)]
-    + [f"lpt{i}" for i in range(1, 10)]
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
 )
 
 
