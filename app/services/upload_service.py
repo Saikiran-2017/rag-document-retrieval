@@ -35,10 +35,12 @@ def max_upload_bytes() -> int:
 
 
 def _sha256_bytes(data: bytes) -> str:
+    """Compute SHA256 hash of bytes data for integrity verification."""
     return hashlib.sha256(data).hexdigest()
 
 
 def _sha256_path(path: Path) -> str:
+    """Compute SHA256 hash of file at path (memory-efficient for large files)."""
     h = hashlib.sha256()
     with path.open("rb") as f:
         for block in iter(lambda: f.read(1024 * 1024), b""):
