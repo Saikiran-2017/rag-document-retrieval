@@ -22,6 +22,12 @@ _WIN_RESERVED = frozenset(
 
 
 def max_upload_bytes() -> int:
+    """
+    Load max upload size from environment or use default.
+    
+    Enforces bounds: 1KB minimum, 512GB maximum.
+    Set KA_MAX_UPLOAD_BYTES to override (bytes).
+    """
     raw = os.environ.get("KA_MAX_UPLOAD_BYTES", "").strip()
     if raw.isdigit():
         return max(1024, min(512 * 1024 * 1024, int(raw)))
