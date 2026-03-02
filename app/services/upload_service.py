@@ -50,9 +50,18 @@ def _sha256_path(path: Path) -> str:
 
 def sanitize_upload_basename(name: str) -> tuple[str | None, str | None]:
     """
+    Validate and sanitize uploaded filename.
+    
     Return (safe_basename, reject_reason).
-
-    Rejects path tricks, empty names, control characters, and reserved Windows names.
+    
+    Rejects:
+    - Path traversal attempts (../../, null bytes)
+    - Empty or whitespace-only names
+    - Control characters (ASCII < 32)
+    - Windows reserved device names (CON, PRN, NUL, LPT1-9, COM1-9)
+    - Special directory markers (., ..)
+    
+    See https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
     """
     if not name or not name.strip():
         return None, "empty_filename"
