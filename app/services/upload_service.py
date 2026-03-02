@@ -80,11 +80,17 @@ def sanitize_upload_basename(name: str) -> tuple[str | None, str | None]:
 
 @dataclass(frozen=True)
 class UploadSaveItem:
+    """Result of a single file upload operation (immutable)."""
     original_filename: str
+    """Original filename provided by user."""
     stored_filename: str
+    """Safe filename used for storage on disk."""
     status: Literal["saved", "duplicate_unchanged", "rejected"]
+    """Outcome: successfully saved, duplicate of existing file, or rejected."""
     detail: str | None = None
+    """Human-readable reason if rejected or duplicate."""
     sha256_hex: str | None = None
+    """SHA256 hash for integrity verification (None if rejected)."""
 
 
 def save_upload_batch(
