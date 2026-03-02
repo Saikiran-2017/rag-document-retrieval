@@ -1,139 +1,107 @@
 # Knowledge Assistant
 
-**Document-grounded chat** in a simple Streamlit app: ask everyday questions, upload PDFs / Word / text, sync your library, and get answers that can cite **sources** and **supporting excerpts** when your files are relevant—without inventing citations when they are not.
+**RAG-powered document Q&A** with honest routing: answers **cite your PDFs, Word docs, and text files** when retrieval is strong - and fall back to **general** replies (without fake citations) when the library is empty, sync fails, or the question is not document-shaped.
+
+**Stack:** Python · OpenAI (embeddings + chat) · LangChain · **FAISS** · **Streamlit** · **FastAPI** · **Next.js** (TypeScript) · SQLite · Docker optional
 
 ---
 
-## Overview
+## At a glance
 
-Knowledge Assistant is a **local-first RAG (retrieval-augmented generation)** workspace. You chat in the main area; documents live in the sidebar. The app embeds your text into a **FAISS** index on disk, retrieves the closest chunks per question, and either answers **from those passages with citations** or falls back to a **general** assistant reply when the library is empty, sync fails, retrieval is weak, or you clearly are not asking about documents.
-
-It is built for **demos, portfolios, and interviews**: the code is modular, failures are handled explicitly, and optional **developer debug** (`KA_DEBUG=1`) exposes routing metadata without leaking secrets.
-
----
-
-## Why this app exists
-
-General-purpose chat tools are broad; this app is **narrow on purpose**: it shines when you have a **known set of files** (notes, policies, specs, study material) and want answers **anchored to that corpus**, with **inspectable evidence**. It does not replace every AI product—it **complements** them for document-centric Q&A and light tasks (summarize, extract, compare) over your own uploads.
+| For… | Why this project |
+|------|------------------|
+| **Recruiters / hiring managers** | End-to-end **ingest → chunk → embed → retrieve → generate** with clear failure handling and a **production-style** API + web UI - not only a notebook. |
+| **Engineers** | Shared **`app/`** domain layer; thin UIs (Streamlit, HTTP); explicit **routing**, **trust gates**, and **per-file health** in the index manifest. |
+| **Demos** | Two runnable surfaces: **Streamlit** (fastest live link) or **Next.js + FastAPI** (streaming chat, document tools, SQLite history). |
 
 ---
 
-## Key capabilities
+## Feature summary
 
-| Area | What you get |
-|------|----------------|
-| **Chat & Q&A** | Default **Auto** mode: general chat, optional **no-retrieval fast path** for short non-document questions, and **grounded** answers when retrieval is strong. |
-| **Library** | Sidebar **upload** → **Sync**; files under `data/raw/`, index under `data/indexes/`. |
-| **Sources & excerpts** | Collapsible **Sources referenced** and **Supporting excerpts** on grounded turns. |
-| **Task modes** | **Summarize**, **Extract**, **Compare** (optional scope for summarize): one LLM call each, same evidence rules—no agents. |
-| **Resilience** | Upload/index/retrieval/generation failures route to **safe general answers**; session sync state only advances when rebuild succeeds. |
-| **Debug** | `KA_DEBUG=1` or code flag: sidebar JSON of routing and errors (no API keys in UI). |
-
----
-
-## Product highlights
-
-- **Chat-first UX** with a polished empty state, starter prompts, and calm positioning copy (“Why this workspace”, comparison table).
-- **Honest routing**: no fake sources; weak retrieval → general reply with a short status line when useful.
-- **Interview-friendly layout**: UI in `streamlit_app.py`; policy and I/O in `app/services/` and `app/llm/`.
+| Area | Details |
+|------|---------|
+| **Retrieval** | OpenAI embeddings, **FAISS** vector store on disk, hybrid-style retrieval hooks; **incremental re-index** when file hashes + chunk settings match saved state (reuse unchanged files). |
+| **Answer modes** | **Grounded** (documents), **web**, **blended**, **general**; routing chooses based on library state, retrieval strength, and query shape; **no forced citations**. |
+| **Trust & health** | Per-file manifest states (`uploaded` → `processing` → `ready` / `ready_limited` / `failed`); retrieval hits filtered for unsafe sources; grounded allowance respects library health. |
+| **Task modes** | **Summarize**, **Extract**, **Compare** over retrieved context - **single LLM call** each (no agent loop). |
+| **Streamlit UI** | Upload, sync, preferences, chat history, sources & excerpts expanders, optional debug panel (`KA_DEBUG=1`). |
+| **Full stack** | **FastAPI** REST + **SSE streaming** chat; **Next.js** chat UI with sidebar (chats, upload, sync, file health); **SQLite** chat persistence. |
+| **Ops** | `.env.example`, **Dockerfile** + **docker-compose** (API + web + `./data` volume), **[DEPLOYMENT.md](DEPLOYMENT.md)** for hosted options. |
 
 ---
 
 ## Architecture
 
-### Layered design
+### Full-stack view
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│  streamlit_app.py   UI, session, ingest wiring, CSS         │
-└───────────────┬─────────────────────────────────────────────┘
-                │
-    ┌───────────┼───────────┬──────────────┬────────────────┐
-    ▼           ▼           ▼              ▼                ▼
- upload    index       chat          doc_task         debug / message
- service   service     service       service          service
-    │           │           │              │                │
-    └───────────┴───────────┴──────┬───────┴────────────────┘
-                                   ▼
-                    app/llm/generator.py  (general + grounded + document tasks)
-                                   │
-                    app/retrieval/vector_store.py  (FAISS)
-                                   │
-                    app/ingestion + app/utils/chunker
+                    ┌──────────────────┐
+                    │   Next.js (web)  │
+                    │  SSE + REST API  │
+                    └────────┬─────────┘
+                             │ HTTP
+                    ┌────────▼─────────┐
+                    │ FastAPI (backend)│
+                    │ /api/v1/*        │
+                    └────────┬─────────┘
+                             │ imports
+┌────────────────┐   ┌───────▼────────────────────────────────────────┐
+│ streamlit_app  │──►│  app/                                             │
+│ (UI only)      │   │  services/  chat, index, upload, doc_task, …    │
+└────────────────┘   │  llm/       generator (general, grounded, tasks)  │
+                     │  retrieval/ FAISS load, retrieve, hybrid helpers │
+                     │  persistence/ chat_store, document_manifest, …     │
+                     │  ingestion/ chunker                              │
+                     └──────────────────────────────────────────────────┘
+                                         │
+                              data/raw/   │   data/indexes/ (FAISS)
+                              uploads     │   + manifest + library state
 ```
 
-### Module roles
+**Principle:** One **domain layer** (`app/`). **Streamlit** and **FastAPI** are hosts; **Next.js** talks only to HTTP. Retrieval, routing, validation, and trust logic stay in **`app/services`** and **`app/llm`** - not duplicated in the frontends.
 
-| Layer | Responsibility |
-|--------|----------------|
-| **UI (`streamlit_app.py`)** | Page layout, sidebar (documents, preferences, task mode, positioning), chat rendering, `ingest_composer_attachments` + manual sync orchestration (same session keys as before), global CSS, toasts. |
-| **Upload service** | Save uploaded bytes to `data/raw/`; supported extensions; returns counts and filenames. |
-| **Index service** | List library files, **fingerprint** for sync, **rebuild** FAISS from chunks, **load** store, **`ensure_index_matches_library`** (rebuild + update `kb_sync_fingerprint` on success). Cached OpenAI embeddings via Streamlit `cache_resource`. |
-| **Chat service** | **`answer_user_query`**: empty query handling; **`auto`** → legacy path (library check, sync, fast path, retrieve, `retrieval_is_useful`, grounded vs general); **`summarize` / `extract` / `compare`** → delegates to doc task service. **`AssistantTurn`** shaping and `append_assistant_turn`. |
-| **Doc task service** | Document-only tasks: retrieval width, optional file filter for summarize, gates (e.g. compare needs ≥2 files, extract/compare use L2 usefulness + relaxed retry), calls **`generate_document_task_answer`** in the generator. |
-| **Debug service** | `KA_DEBUG` / flag, per-turn dict, `merge`, `short_exc`, sidebar JSON panel. |
-| **Message service** | User-facing strings, `merge_notes`, preview/path/status HTML helpers. |
-| **Generator layer** | OpenAI chat via LangChain: **general** system prompt, **grounded** Q&A with `[SOURCE n]` blocks, **summarize / extract / compare** system prompts—each a **single** completion, temperature 0 for grounded/tasks. |
+### Request path (simplified)
 
----
-
-## How it works end to end
-
-1. **Upload** (sidebar) saves files to `data/raw/`.
-2. **Sync** (or send with new files) runs **ingest**: save → **chunk** → **embed** → **write FAISS** → set **library fingerprint** in session when successful.
-3. **Ask** (chat input): **`answer_user_query`** runs. In **Auto**, the app may skip retrieval for very short non-document questions; otherwise it **ensures the index matches** the fingerprint, **loads FAISS**, **retrieves top-k**, and if the best hit is strong enough, calls **grounded generation** with numbered context; else **general generation** (and notes when the library was unavailable or retrieval weak).
-4. **Task modes** bypass the “chatty” fast path and run **task-specific** prompts over retrieved chunks, with explicit failure messages when prerequisites are not met.
-5. **UI** renders markdown, optional status lines, and expanders for sources and excerpts on grounded-shaped messages.
-
----
-
-## Routing behavior (Auto mode)
-
-- **No files on disk** → general answer (no citations).
-- **Sync / rebuild failed** → general answer + library-unavailable note.
-- **Short query with no document keywords** → general answer (skip FAISS) for latency and relevance.
-- **FAISS load or retrieve error** → general answer (debug keys if enabled).
-- **Weak best-hit distance** → general answer (no fake sources).
-- **Strong retrieval** → grounded answer; **grounded LLM error** → general fallback + note.
-
-Task modes add their own gates (e.g. compare needs two files; extract/compare use retrieval quality).
-
----
-
-## Failure resilience
-
-- **Ingest** errors do not block the assistant turn: user still gets a reply; warnings merge into the status line when relevant.
-- **`safe_general_answer`** wraps general generation so the UI never hard-crashes on model errors.
-- **Session integrity**: `kb_sync_fingerprint` updates only after a successful rebuild; composer widget reset aligns with successful ingest.
-- **Debug** records routing and exception summaries without printing stack traces in the main UI.
+1. **Upload** → safe save under `data/raw/` (typed, size limits, duplicate detection on API path).
+2. **Sync** → fingerprint library → chunk changed files → **embed** (with disk cache) → rebuild or merge FAISS → **document manifest** updated from parse / index / probe.
+3. **Chat** → optional web search branch → retrieve top-k → **usefulness + trust** gates → **one** completion (grounded with `[SOURCE n]` blocks, or general).
 
 ---
 
 ## Screenshots
 
-Place PNGs under **`docs/images/`** and reference them below (uncomment or add links after you capture).
+Add PNGs under **`docs/images/`** and drop them into the table (or embed in this README).
 
-| # | Suggested file | What to show |
-|---|----------------|--------------|
-| 1 | `01-hero-empty.png` | Empty state: hero panel, value prop, starter prompts. |
-| 2 | `02-chat-general.png` | General question; clean assistant reply; **no** source expanders. |
-| 3 | `03-sidebar-library.png` | Sidebar open: upload, library list, Sync, Preferences (task mode visible). |
-| 4 | `04-grounded-answer.png` | Document-grounded reply; **Sources referenced** + **Supporting excerpts** (one expanded). |
-| 5 | `05-task-summarize.png` | Task mode **Summarize** + composer hint above input; summary with sources. |
-| 6 | `06-compare-or-extract.png` | **Compare** or **Extract** with a grounded-style answer. |
-| 7 | `07-dark-or-positioning.png` | Optional: dark theme **or** “Why this workspace” expander open. |
+### Streamlit
+
+| # | File | Capture |
+|---|------|---------|
+| 1 | `01-streamlit-hero.png` | Empty state: hero, value prop, starter prompts. |
+| 2 | `02-streamlit-general.png` | Short non-doc question → general answer, **no** sources. |
+| 3 | `03-streamlit-library.png` | Sidebar: upload, file list, Sync, task mode. |
+| 4 | `04-streamlit-grounded.png` | Grounded reply + **Sources** / **Supporting excerpts** expanded. |
+| 5 | `05-streamlit-task.png` | Summarize or Compare with evidence. |
+
+### Next.js + API
+
+| # | File | Capture |
+|---|------|---------|
+| 6 | `06-web-empty.png` | Empty hero + suggested prompts. |
+| 7 | `07-web-streaming.png` | Assistant streaming + mode badge. |
+| 8 | `08-web-sources.png` | **Sources referenced** + optional web sources cards. |
+| 9 | `09-web-mobile.png` | Narrow width: drawer menu + composer (optional). |
+
+**Example embed (after you add files):**
 
 ```markdown
-<!-- Example once files exist:
-![Empty state](docs/images/01-hero-empty.png)
--->
+![Next.js chat](docs/images/07-web-streaming.png)
 ```
 
 ---
 
-## Local setup
+## Setup guide
 
-**Prerequisites:** Python **3.11+**, [OpenAI API key](https://platform.openai.com/).
+**Prerequisites:** Python **3.11+**, Node **20+** (for `web/`), [OpenAI API key](https://platform.openai.com/).
 
 ```bash
 git clone <your-repo-url>
@@ -146,59 +114,133 @@ python -m venv .venv
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env    # Windows: Copy-Item .env.example .env
+cp .env.example .env   # PowerShell: Copy-Item .env.example .env
+# Set OPENAI_API_KEY in .env
 ```
 
-`.env`:
+**Optional tests:** `pip install -r requirements-dev.txt` then `pytest`.
 
-```env
-OPENAI_API_KEY=sk-...
-```
-
-**Developer debug (optional):**
-
-```bash
-set KA_DEBUG=1          # Windows CMD
-$env:KA_DEBUG="1"      # PowerShell
-export KA_DEBUG=1      # macOS / Linux
-```
+### Run Streamlit
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
-Open `http://localhost:8501` (or the URL Streamlit prints).
+→ `http://localhost:8501` · Debug: `KA_DEBUG=1`
 
-**Deploy:** See [DEPLOYMENT.md](DEPLOYMENT.md) for a Streamlit-friendly host (e.g. Render).
+### Run FastAPI + Next.js
+
+**Terminal 1 - API** (repo root, venv active):
+
+```bash
+# CMD
+set PYTHONPATH=.
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```powershell
+# PowerShell
+$env:PYTHONPATH="."
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+**Terminal 2 - Web:**
+
+```bash
+cd web
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+→ `http://localhost:3000` · Set `NEXT_PUBLIC_API_URL` to match the API · CORS: `KA_CORS_ORIGINS` (see `.env.example`).
+
+### Docker (all-in-one)
+
+```bash
+cp .env.example .env   # add OPENAI_API_KEY
+docker compose up --build
+```
+
+UI `:3000`, API `:8000`, data persisted in `./data`. See **[DEPLOYMENT.md](DEPLOYMENT.md)** for cloud options.
+
+### Environment variables
+
+Summarized in **`.env.example`** (root) and **`web/.env.example`**. Highlights: `OPENAI_API_KEY`, `KA_CORS_ORIGINS`, `KA_ENV` (hide OpenAPI in prod), `NEXT_PUBLIC_API_URL`.
 
 ---
 
 ## Usage (quick)
 
-1. Open **Preferences** → leave **Task mode** on **Auto** for normal chat.
-2. **Upload** documents → **Sync documents**.
-3. Ask questions; open **Sources referenced** / **Supporting excerpts** when the answer is document-backed.
-4. Switch task mode to **Summarize**, **Extract**, or **Compare** for focused prompts (still one-shot completions over retrieved text).
-5. **New chat** clears the thread; the library on disk stays until you change files.
+1. **Upload** supported files → **Sync** to build/update the index.
+2. Ask in **Auto** for normal Q&A; switch to **Summarize / Extract / Compare** for focused tasks.
+3. Open **Sources** (Streamlit expanders or Next cards) when the answer is document-backed.
+4. **New chat** clears thread history; the **library on disk** remains until you change files.
 
 ---
 
-## Limitations and tradeoffs
+## Tradeoffs & limitations
 
-- **Retrieval is approximate**: embedding similarity ≠ perfect relevance; the L2 gate reduces bogus grounding but does not guarantee correctness.
-- **Summaries / tasks over large libraries** use **top-k excerpts**, not full-document reads in one shot—appropriate for this stack, not a replacement for dedicated summarization pipelines at huge scale.
-- **Single-user / local session**: Streamlit `session_state`; not a multi-tenant production API.
-- **Costs**: OpenAI usage for embeddings + chat per query/sync.
-- **Trust**: always verify critical answers against source text.
+| Topic | Reality |
+|-------|---------|
+| **Retrieval** | Embedding similarity is a **proxy** for relevance; distance gates reduce bogus grounding but do not guarantee correctness. |
+| **Corpus size** | Answers use **top-k chunks**, not full multi-hundred-page reads in one shot, by design for latency and cost. |
+| **Scale-out** | Default deployment assumes **one process** with **local FAISS + SQLite**; horizontal scale needs shared storage and a deliberate embedding/index strategy. |
+| **Auth** | No built-in auth; treat as **personal / demo** unless you add a gateway. |
+| **Cost** | Every sync and query uses **OpenAI** tokens; monitor usage on shared demos. |
+| **Verification** | Users should **verify** high-stakes answers against the cited source text. |
 
 ---
 
-## Future improvements
+## Future roadmap
 
-- Optional **vector store** swap (e.g. managed DB) for multi-user demos.
-- **Evaluation** set (retrieval hit rate, grounded answer faithfulness) for interviews.
-- **Export** chat or cited snippets to Markdown/PDF.
-- **Auth** and deployed secrets pattern for a public demo host.
+- **Eval harness**: fixed Q/A set for retrieval hit rate and answer groundedness (great for interviews).
+- **Managed vector DB**: optional swap from file-backed FAISS for multi-user demos.
+- **Export**: chat or citations to Markdown/PDF.
+- **Auth + tenancy**: API keys or OAuth for public deployments.
+- **Observability**: structured logs / tracing around retrieve + generate.
+
+---
+
+## Appendix: portfolio & interview pack
+
+*Copy the sections below into your resume site, LinkedIn, or interview prep doc.*
+
+### Resume bullets (2)
+
+- **Built a production-style RAG workspace** (Python, FAISS, OpenAI, LangChain) with **incremental indexing**, **per-document health**, and **trust-aware routing** so answers cite uploads only when retrieval is reliable, plus **FastAPI** + **Next.js** with **SSE streaming** and SQLite chat history.
+
+- **Designed a shared domain layer** (`app/services`, `app/llm`) consumed by **Streamlit** and **HTTP APIs**, enabling **document + web + blended** answer modes and **summarize/extract/compare** tasks without duplicating retrieval or validation logic.
+
+### Portfolio blurb (short)
+
+> **Knowledge Assistant**. A document-grounded chat app that ingests PDFs and Office files into a **FAISS** index, retrieves with OpenAI embeddings, and answers with **honest routing**: grounded replies with **sources** when evidence is strong, general fallback when it is not. Includes **Streamlit** and a **FastAPI + Next.js** stack with **streaming** and Docker-ready deployment, built to demo **end-to-end ML engineering** and **API design** in interviews.
+
+### Demo script (2–4 minutes)
+
+1. **Hook (20s)**: “Small RAG workspace: chat plus a document library. It cites files when retrieval supports it, and it won’t invent sources when it doesn’t.”
+2. **General path (30s)**: No uploads (or unrelated question): show a **clean general answer** and **no** source UI.
+3. **Grounded path (60–90s)**: Upload a short PDF/TXT → **Sync** → ask something **only in the file** → show **Sources** (and excerpts in Streamlit or cards in Next).
+4. **Trust / resilience (30s)**: Mention **manifest health**, fallback when sync or retrieval is weak, optional **`KA_DEBUG`** to show routing.
+5. **Stretch (30s)**: **Summarize** or **Compare** task mode, or **Next.js streaming** line appearing token-by-token.
+6. **Close (15s)**: “Single domain layer in `app/`, FAISS on disk, thin UIs. Easy to walk through **ingest → embed → retrieve → generate** in a system design round.”
+
+### Interview explanation (60–90 seconds)
+
+> “I built Knowledge Assistant to practice the full RAG loop in a maintainable way. Uploads land in a raw folder; sync chunks and embeds them into a **FAISS** index with **content-hash-based incremental rebuilds** so unchanged files aren’t re-embedded every time.  
+> On a question, the **chat service** decides whether to retrieve, whether the hits are strong enough to **ground** the answer, and whether to blend in **web** results. There’s a **document manifest** for per-file health so we don’t treat broken or partial indexes as fully trustworthy.  
+> The same logic powers **Streamlit** for quick demos and a **FastAPI** backend with **SSE streaming** for a **Next.js** UI, with chat history in **SQLite**. I kept retrieval and prompts in one place so the architecture stays easy to explain and extend.”
+
+---
+
+## Routing behavior (Auto mode): detail
+
+- No files / failed sync → **general** answer (no citations).
+- Short, non-document-ish queries → optional **fast path** without retrieval.
+- Weak top hit (distance / usefulness) → **general** (no fake sources).
+- Strong retrieval → **grounded** generation; LLM failure → safe general fallback + note.
+
+Task modes add gates (e.g. **Compare** needs ≥2 files).
 
 ---
 
@@ -206,40 +248,28 @@ Open `http://localhost:8501` (or the URL Streamlit prints).
 
 ```text
 rag-document-retrieval/
-├── streamlit_app.py          # UI, layout, CSS, event wiring
-├── requirements.txt
-├── .env.example
-├── LICENSE
-├── app/
+├── streamlit_app.py
+├── backend/app/           # FastAPI routes, schemas
+├── web/                   # Next.js (App Router, Tailwind)
+├── app/                   # Shared RAG domain
 │   ├── services/
-│   │   ├── upload_service.py
-│   │   ├── index_service.py
-│   │   ├── chat_service.py
-│   │   ├── doc_task_service.py
-│   │   ├── debug_service.py
-│   │   └── message_service.py
-│   ├── llm/generator.py      # General, grounded, document-task completions
-│   ├── retrieval/vector_store.py
-│   ├── ingestion/
-│   └── utils/chunker.py
-├── data/raw/                 # documents (often gitignored)
-├── data/indexes/             # FAISS (often gitignored)
-└── docs/images/              # README / portfolio screenshots
+│   ├── llm/
+│   ├── retrieval/
+│   ├── persistence/
+│   └── ingestion/
+├── data/raw/              # uploads (gitignored except samples)
+├── data/indexes/          # FAISS + manifest (gitignored)
+├── docs/images/           # screenshots for README / portfolio
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── requirements-dev.txt
+├── .env.example
+└── DEPLOYMENT.md
 ```
-
----
-
-## Demo script (2–4 minutes)
-
-1. **Hook (20s)** — “This is a small RAG app: chat in the center, documents in the sidebar. It answers from your files when it should—and it won’t fake citations.”
-2. **General chat (30s)** — Auto mode, short question with no uploads → fast, plain answer; point out **no** source panels.
-3. **Library + grounded (60–90s)** — Upload a short PDF/TXT → **Sync** → ask something only the file contains → expand **Sources referenced** and one **Supporting excerpt**.
-4. **Resilience (30s)** — Mention: sync failure doesn’t fake “updated”; weak retrieval falls back to general; optional `KA_DEBUG=1` for routing.
-5. **Task mode (30–60s)** — **Summarize** or **Extract** one request → same evidence model, one LLM call, no agents.
-6. **Close (15s)** — “Modular services under `app/services/`, FAISS on disk, OpenAI for embed + chat—good for explaining ingest → retrieve → generate in interviews.”
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE).

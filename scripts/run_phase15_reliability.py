@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 15 — end-to-end reliability validation entrypoint.
+Phase 15: end-to-end reliability validation entrypoint.
 
 1. Validates ``eval/phase15_scenarios.json`` structure (15+ scenarios).
 2. Runs pytest routing + chat-store tests (no API keys required).
