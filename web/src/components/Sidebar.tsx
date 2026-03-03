@@ -70,6 +70,7 @@ export function Sidebar({
   onDeleteChat,
   onUpload,
   onSync,
+  onDeleteDocument,
   uploadHint,
   syncHint,
 }: {
@@ -84,6 +85,7 @@ export function Sidebar({
   onDeleteChat: (id: string) => void;
   onUpload: (files: FileList | null) => void;
   onSync: () => void;
+  onDeleteDocument: (filename: string) => void;
   uploadHint?: string | null;
   syncHint?: string | null;
 }) {
@@ -212,8 +214,19 @@ export function Sidebar({
                 key={d.filename}
                 className="rounded-lg border border-stone-200/80 bg-white px-2.5 py-2 text-xs shadow-sm shadow-stone-900/[0.02]"
               >
-                <div className="truncate font-medium text-stone-800" title={d.filename}>
-                  {d.filename}
+                <div className="flex items-start gap-1">
+                  <div className="min-w-0 flex-1 truncate font-medium text-stone-800" title={d.filename}>
+                    {d.filename}
+                  </div>
+                  <button
+                    type="button"
+                    title="Remove from library"
+                    disabled={busy}
+                    onClick={() => onDeleteDocument(d.filename)}
+                    className="shrink-0 rounded px-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 disabled:opacity-40"
+                  >
+                    <span className="sr-only">Remove {d.filename}</span>×
+                  </button>
                 </div>
                 <div className="mt-0.5 text-[11px] text-stone-500">
                   {HEALTH_LABEL[d.health] ?? d.health}

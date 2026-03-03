@@ -147,6 +147,18 @@ export async function listDocuments(): Promise<{ documents: DocumentRow[]; count
   return r.json();
 }
 
+export async function deleteDocument(filename: string): Promise<{ ok: boolean; message: string }> {
+  const q = new URLSearchParams({ filename });
+  const r = await fetch(apiUrl(`/api/v1/documents?${q.toString()}`), {
+    method: "DELETE",
+  });
+  const data: unknown = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error(formatApiErrorBody(data));
+  }
+  return data as { ok: boolean; message: string };
+}
+
 export interface SyncLibraryResult {
   ok: boolean;
   status: string;

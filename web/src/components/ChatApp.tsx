@@ -10,6 +10,7 @@ import {
   getApiBase,
   getMessages,
   listChats,
+  deleteDocument,
   listDocuments,
   postChatStream,
   setChatTitle,
@@ -219,6 +220,20 @@ export function ChatApp() {
     }
   };
 
+  const handleDeleteDocument = async (filename: string) => {
+    setBanner(null);
+    setBusy(true);
+    try {
+      const res = await deleteDocument(filename);
+      setSyncHint(res.message ?? "Removed from library.");
+      await refreshDocuments();
+    } catch (e) {
+      setBanner(e instanceof Error ? e.message : "Could not remove file");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const sendMessage = async (q: string) => {
     if (!activeSessionId || streaming) return;
     setBanner(null);
@@ -379,6 +394,7 @@ export function ChatApp() {
           onDeleteChat={handleDeleteChat}
           onUpload={handleUpload}
           onSync={handleSync}
+          onDeleteDocument={handleDeleteDocument}
           uploadHint={uploadHint}
           syncHint={syncHint}
         />
