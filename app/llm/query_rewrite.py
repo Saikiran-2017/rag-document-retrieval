@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.config import get_openai_api_key
+from app.llm.query_intent import is_broad_document_overview_query
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ def rewrite_for_retrieval(user_query: str, *, model: str = "gpt-4o-mini") -> str
     if os.environ.get("KA_NO_REWRITE", "").strip().lower() in ("1", "true", "yes"):
         return user_query.strip()
     q = user_query.strip()
+    if is_broad_document_overview_query(q):
+        return q
     if should_skip_rewrite_llm(q):
         return q
     try:

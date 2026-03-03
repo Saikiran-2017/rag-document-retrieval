@@ -32,11 +32,11 @@ def _urls_from_web_context_block(web_context_block: str) -> list[str]:
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
 # FAISS L2 distance on retrieved chunks: lower is closer. Above this, treat as weak match.
-USEFUL_RETRIEVAL_MAX_L2 = 1.18
-# Hybrid (BM25 + vector + RRF): stricter gates; prefer web/general over weak doc grounding.
-_HYBRID_MAX_L2 = 1.02
-_HYBRID_MIN_RRF = 0.014
-_HYBRID_VERY_GOOD_L2 = 0.82
+USEFUL_RETRIEVAL_MAX_L2 = 1.22
+# Hybrid (BM25 + vector + RRF): balance precision vs recall for doc QA (broad questions sit higher in L2).
+_HYBRID_MAX_L2 = 1.1
+_HYBRID_MIN_RRF = 0.011
+_HYBRID_VERY_GOOD_L2 = 0.88
 # Document tasks (summarize / compare) allow slightly looser top-hit retrieval.
 _HYBRID_TASK_MAX_L2 = 1.1
 _HYBRID_TASK_MIN_RRF = 0.012
@@ -68,6 +68,8 @@ Rules:
 - When you state a fact from the Text, cite it with the matching label, e.g. [SOURCE 1].
 - If two Text passages contradict each other, say so briefly and cite both sources.
 - If the question asks for content not present in the Text lines, say so and use the unknown phrase above.
+- For overview, summary, main themes, or "what is this document about" questions, synthesize across all SOURCE blocks you were given; cite multiple [SOURCE n] when different sections support different parts of the answer.
+- When CONTEXT includes multiple [SOURCE N] blocks and more than one is relevant, use more than one citation; do not answer from only the first block if other blocks clearly apply.
 - Keep the answer concise and directly responsive to the question."""
 
 
@@ -157,14 +159,23 @@ def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def build_grounded_messages(query: str, context_block: str) -> list[SystemMessage | HumanMessage]:
+def build_grounded_messages(
+    query: str, context_block: str, *, n_context_sources: int = 1
+) -> list[SystemMessage | HumanMessage]:
     """System + user messages for a single grounded completion."""
+    synth = ""
+    if n_context_sources >= 2:
+        synth = (
+            "\nYou were given multiple SOURCE blocks. If the question is broad or spans topics, "
+            "draw from every relevant block and cite each one you use (not only [SOURCE 1])."
+        )
     user_body = (
         f"CONTEXT:\n{context_block}\n\n"
         f"QUESTION:\n{query.strip()}\n\n"
         "Answer using only the Text under each [SOURCE N]. "
         "Cite [SOURCE N] when you use a passage. "
         f"If you cannot answer from the Text, reply exactly: {UNKNOWN_PHRASE}"
+        f"{synth}"
     )
     return [SystemMessage(content=GROUNDING_SYSTEM_PROMPT), HumanMessage(content=user_body)]
 
@@ -388,8 +399,8 @@ def hybrid_retrieval_is_useful(
 
 # Stricter than hybrid_retrieval_is_useful: when a file is only partially trusted
 # (ready_limited) or the library has no fully healthy file, require a clearly strong match.
-_LIMITED_QA_MAX_L2 = 0.74
-_LIMITED_QA_MIN_RRF = 0.016
+_LIMITED_QA_MAX_L2 = 0.86
+_LIMITED_QA_MIN_RRF = 0.012
 _LIMITED_TASK_MAX_L2 = 0.92
 _LIMITED_TASK_MIN_RRF = 0.013
 
@@ -502,7 +513,9 @@ def stream_grounded_answer_tokens(
         yield "No passages retrieved."
         return
     context_block = format_context_for_prompt(retrieved_chunks)
-    messages = build_grounded_messages(query, context_block)
+    messages = build_grounded_messages(
+        query, context_block, n_context_sources=len(retrieved_chunks)
+    )
     model = create_chat_llm(
         model=chat_model,
         temperature=0.0,
@@ -593,7 +606,9 @@ def generate_grounded_answer(
         )
 
     context_block = format_context_for_prompt(retrieved_chunks)
-    messages = build_grounded_messages(query, context_block)
+    messages = build_grounded_messages(
+        query, context_block, n_context_sources=len(retrieved_chunks)
+    )
     model = llm or create_chat_llm(
         model=chat_model,
         temperature=temperature,
