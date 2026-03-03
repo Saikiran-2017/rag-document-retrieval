@@ -178,6 +178,7 @@ def rebuild_knowledge_index(
                 actual_chunk_counts=actual_counts,
                 retrieval_probe=probe,
             )
+            document_manifest.prune_manifest_to_filenames(faiss_folder, set(current_hashes.keys()))
             if debug_service.debug_enabled():
                 debug_service.merge(index_sync="incremental_skip_unchanged", index_vector_count=nvec)
             logger.info("Index unchanged (file hashes + settings match); skipped rebuild (%s vectors).", nvec)
@@ -267,6 +268,7 @@ def rebuild_knowledge_index(
             actual_chunk_counts=actual_counts,
             retrieval_probe=probe,
         )
+        document_manifest.prune_manifest_to_filenames(faiss_folder, set(current_hashes.keys()))
         file_chunk_counts = {name: int(fb.get("expected_chunks") or 0) for name, fb in file_build.items()}
         index_library_state.save_state(
             faiss_folder,

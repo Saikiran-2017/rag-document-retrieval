@@ -24,13 +24,14 @@ from app.llm.generator import (
     stream_grounded_answer_tokens,
     stream_web_grounded_answer_tokens,
 )
+from app.llm.query_intent import is_broad_document_overview_query, user_expects_document_grounding
 from app.llm.query_rewrite import rewrite_for_retrieval
 from app.retrieval.context_selection import (
     hybrid_pool_size,
     rerank_hybrid_hits,
     select_generation_context,
 )
-from app.retrieval.hybrid_retrieve import hybrid_retrieve
+from app.retrieval.hybrid_retrieve import hybrid_retrieve, merge_hybrid_hit_pools
 from app.retrieval.vector_store import RetrievedChunk, faiss_vector_count
 from app.services import debug_service, document_health, index_service
 from app.services.perf_service import record_phase_ms, timed_phase
@@ -150,12 +151,9 @@ def _wants_blended_web(query: str) -> bool:
     return bool(_TIME_SENSITIVE_HINT.search(query))
 
 
-_DOC_QUERY_HINT = re.compile(
-    r"\b(document|documents|file|files|pdf|upload|uploaded|page|pages|passage|passages|"
-    r"excerpt|excerpts|cite|citation|source\b|sources\b|section|library|chunk|"
-    r"these files|my files|the text|summarize|summary|key points|themes|outline|"
-    r"extract|according to|from the|in the document)\b",
-    re.I,
+# Second-pass retrieval query for broad doc questions (improves recall across sections).
+_DOC_OVERVIEW_RETRIEVAL_BOOST = (
+    "main sections themes introduction conclusion purpose overview key ideas summary"
 )
 
 
@@ -163,7 +161,7 @@ def wants_no_retrieval_fastpath(query: str) -> bool:
     q = query.strip()
     if len(q) < 4 or len(q) > 220:
         return False
-    if _DOC_QUERY_HINT.search(q):
+    if user_expects_document_grounding(q):
         return False
     return True
 
@@ -344,7 +342,14 @@ def _answer_user_query_impl(
             exception_summary=gerr,
         )
 
-    k_pool = hybrid_pool_size(nvec, int(top_k))
+    base_pool = hybrid_pool_size(nvec, int(top_k))
+    broad_overview = is_broad_document_overview_query(query)
+    if broad_overview:
+        k_pool = min(nvec, max(base_pool, 22))
+        kv = min(nvec, max(32, min(48, nvec)))
+    else:
+        k_pool = base_pool
+        kv = min(28, nvec)
     try:
         t_rw = time.perf_counter()
         rewritten = rewrite_for_retrieval(query)
@@ -354,14 +359,30 @@ def _answer_user_query_impl(
                 store,
                 rewritten,
                 k_final=k_pool,
-                k_vector=min(28, nvec),
-                k_bm25=min(28, nvec),
+                k_vector=kv,
+                k_bm25=kv,
             )
+            if broad_overview:
+                boost_q = f"{rewritten} {_DOC_OVERVIEW_RETRIEVAL_BOOST}".strip()
+                pool_b = hybrid_retrieve(
+                    store,
+                    boost_q,
+                    k_final=k_pool,
+                    k_vector=kv,
+                    k_bm25=kv,
+                )
+                pool_hits = merge_hybrid_hit_pools(pool_hits, pool_b)
             ranked_hits = rerank_hybrid_hits(pool_hits)
             ranked_hits = document_health.filter_trusted_retrieval_hits(faiss_folder, ranked_hits)
             doc_good = document_health.allow_document_grounding(faiss_folder, ranked_hits)
             hits = (
-                select_generation_context(ranked_hits, mode="qa", top_k=int(top_k), nvec=nvec)
+                select_generation_context(
+                    ranked_hits,
+                    mode="qa",
+                    top_k=int(top_k),
+                    nvec=nvec,
+                    broad_document_question=broad_overview,
+                )
                 if doc_good
                 else []
             )

@@ -38,7 +38,7 @@ PREVIEW_CHARS = 300
 # Sidebar UI: max value for "Sources per answer" (retrieval top_k).
 SIDEBAR_TOP_K_MAX = 12
 # Default retrieval width (lower = faster retrieval + smaller prompts).
-DEFAULT_TOP_K = 3
+DEFAULT_TOP_K = 5
 
 STARTER_QUESTIONS = [
     "Summarize the key points I should remember.",
