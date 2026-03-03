@@ -285,3 +285,20 @@ def file_status(faiss_folder: Path, source_name: str) -> dict[str, Any] | None:
         return dict(row)
     return None
 
+
+def prune_manifest_to_filenames(faiss_folder: Path, valid_names: set[str]) -> None:
+    """Drop manifest rows for files that no longer exist on disk (after delete or rename)."""
+    data = _load(faiss_folder)
+    files: dict[str, Any] = data.setdefault("files", {})
+    for name in list(files.keys()):
+        if name not in valid_names:
+            del files[name]
+    _save(faiss_folder, data)
+
+
+def clear_all_file_rows(faiss_folder: Path) -> None:
+    """Reset per-file health rows (e.g. library emptied)."""
+    data = _load(faiss_folder)
+    data["files"] = {}
+    _save(faiss_folder, data)
+

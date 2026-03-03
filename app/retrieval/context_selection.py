@@ -7,7 +7,7 @@ then a bounded context size for generation (sources in UI match CONTEXT blocks).
 
 from __future__ import annotations
 
-import re
+from collections import defaultdict, deque
 from typing import Any, Literal
 
 from app.retrieval.vector_store import RetrievedChunk
@@ -55,9 +55,9 @@ def _is_weak_chunk(hit: RetrievedChunk) -> bool:
     """Drop obvious noise from the generation pool (not used for top-hit gate)."""
     d = float(hit.distance)
     rrf = float(hit.metadata.get("rrf_score") or 0.0)
-    if d >= 1.42 and rrf < 0.0105:
+    if d >= 1.45 and rrf < 0.0095:
         return True
-    if d >= 1.55:
+    if d >= 1.62:
         return True
     return False
 
@@ -67,11 +67,40 @@ def filter_generation_candidates(hits: list[RetrievedChunk]) -> list[RetrievedCh
     return [h for h in hits if not _is_weak_chunk(h)]
 
 
-def context_limit_for_task(mode: TaskMode, top_k: int, nvec: int) -> int:
+def diversify_chunks_round_robin(candidates: list[RetrievedChunk], limit: int) -> list[RetrievedChunk]:
+    """
+    Interleave chunks across ``source_name`` so multi-file libraries surface in broad Q&A.
+
+    Preserves per-file order from ``candidates``; only used when multiple sources exist.
+    """
+    if limit < 1 or not candidates:
+        return []
+    by_src: dict[str, deque[RetrievedChunk]] = defaultdict(deque)
+    order: list[str] = []
+    for h in candidates:
+        sn = str(h.metadata.get("source_name") or "").strip() or "_unknown"
+        if sn not in by_src:
+            order.append(sn)
+        by_src[sn].append(h)
+    if len(order) <= 1:
+        return list(candidates)[:limit]
+    out: list[RetrievedChunk] = []
+    while len(out) < limit and any(by_src.values()):
+        for sn in order:
+            q = by_src.get(sn)
+            if q and len(out) < limit:
+                out.append(q.popleft())
+    return out
+
+
+def context_limit_for_task(
+    mode: TaskMode, top_k: int, nvec: int, *, broad_document_question: bool = False
+) -> int:
     """How many chunks to pass into the LLM after rerank/filter."""
     tk = max(1, int(top_k))
     if mode == "qa":
-        k = min(max(tk, 2), 5)
+        upper = 10 if broad_document_question else 5
+        k = min(max(tk, 3), upper)
     elif mode == "summarize":
         k = min(nvec, max(8, tk * 2))
     elif mode == "compare":
@@ -87,6 +116,7 @@ def select_generation_context(
     mode: TaskMode,
     top_k: int,
     nvec: int,
+    broad_document_question: bool = False,
 ) -> list[RetrievedChunk]:
     """
     Reranked list → filter weak → take top ``context_limit_for_task``.
@@ -96,7 +126,13 @@ def select_generation_context(
     filtered = filter_generation_candidates(ranked_hits)
     if not filtered:
         filtered = ranked_hits[:1] if ranked_hits else []
-    limit = context_limit_for_task(mode, top_k, nvec)
+    limit = context_limit_for_task(
+        mode, top_k, nvec, broad_document_question=broad_document_question
+    )
+    if broad_document_question and mode == "qa":
+        names = {str(h.metadata.get("source_name") or "").strip() for h in filtered}
+        if len({n for n in names if n}) > 1:
+            return diversify_chunks_round_robin(filtered, limit)
     return filtered[:limit]
 
 

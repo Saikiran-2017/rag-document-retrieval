@@ -131,3 +131,49 @@ def hybrid_retrieve(
             )
         )
     return out
+
+
+def merge_hybrid_hit_pools(*pools: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """
+    Merge multiple hybrid retrieval pools by chunk identity.
+
+    Keeps the stronger hit per chunk (higher RRF; tiebreak: lower vector distance).
+    Re-ranks the merged list for downstream rerank_hybrid_hits.
+    """
+    if not pools:
+        return []
+
+    def key_of(h: RetrievedChunk) -> str:
+        m = dict(h.metadata or {})
+        return _chunk_key(m, h.page_content[:48] if h.page_content else "")
+
+    def rank_tuple(h: RetrievedChunk) -> tuple[float, float]:
+        rrf = float(h.metadata.get("rrf_score") or 0.0)
+        d = float(h.distance)
+        return (rrf, -d)
+
+    best: dict[str, RetrievedChunk] = {}
+    for pool in pools:
+        for h in pool:
+            k = key_of(h)
+            if not k:
+                continue
+            cur = best.get(k)
+            if cur is None or rank_tuple(h) > rank_tuple(cur):
+                best[k] = h
+
+    merged = sorted(best.values(), key=lambda h: rank_tuple(h), reverse=True)
+    out: list[RetrievedChunk] = []
+    for rank, h in enumerate(merged):
+        meta = dict(h.metadata or {})
+        meta["merged_rank"] = rank
+        out.append(
+            RetrievedChunk(
+                rank=rank,
+                page_content=h.page_content,
+                metadata=meta,
+                distance=float(h.distance),
+                score_kind=h.score_kind,
+            )
+        )
+    return out
