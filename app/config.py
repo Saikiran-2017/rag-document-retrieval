@@ -1,40 +1,17 @@
-"""Load settings from environment variables (via .env for local dev)."""
+"""Load settings from environment variables; optional local files for dev only."""
 
 import os
 
-from dotenv import load_dotenv
+from app.env_loader import load_repo_dotenv
 
-load_dotenv()
+load_repo_dotenv()
 
 
 def get_openai_api_key() -> str:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
         raise ValueError(
-            "OPENAI_API_KEY is missing. Copy .env.example to .env and set your key."
+            "OPENAI_API_KEY is missing. Set it in the environment (e.g. Render), "
+            "or create a gitignored .env.local / .env from .env.example."
         )
     return key
-
-# Modified 2024-08-28
-
-# Modified 2024-09-19
-
-# Modified 2024-10-13
-
-# Modified 2024-08-01
-
-# Modified 2024-08-28
-
-# Modified 2024-09-19
-
-# Modified 2025-08-28
-
-# Modified 2025-09-19
-
-# Modified 2025-10-13
-
-# Modified 2025-08-01
-
-# Modified 2025-08-28
-
-# Modified 2025-09-19

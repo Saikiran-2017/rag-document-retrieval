@@ -41,9 +41,9 @@ def get_cors_allow_origins() -> list[str]:
 def get_settings() -> Settings:
     raw = Path(os.environ.get("KA_RAW_DIR", str(get_default_raw_dir()))).resolve()
     fss = Path(os.environ.get("KA_FAISS_DIR", str(get_default_faiss_folder()))).resolve()
-    cs = int(os.environ.get("KA_DEFAULT_CHUNK_SIZE", "500"))
-    co = int(os.environ.get("KA_DEFAULT_CHUNK_OVERLAP", "80"))
-    tk = int(os.environ.get("KA_DEFAULT_TOP_K", "3"))
+    cs = int(os.environ.get("KA_DEFAULT_CHUNK_SIZE", "900"))
+    co = int(os.environ.get("KA_DEFAULT_CHUNK_OVERLAP", "120"))
+    tk = int(os.environ.get("KA_DEFAULT_TOP_K", "5"))
     return Settings(
         raw_dir=raw,
         faiss_dir=fss,
