@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import app.config  # noqa: F401; load_dotenv() before services read OPENAI_API_KEY
+import app.config  # noqa: F401; load_repo_dotenv() before services read OPENAI_API_KEY
 
 from app.persistence import chat_store
 
