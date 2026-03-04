@@ -114,8 +114,8 @@ python -m venv .venv
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # PowerShell: Copy-Item .env.example .env
-# Set OPENAI_API_KEY in .env
+# Secrets: set OPENAI_API_KEY in the shell, or copy .env.example to gitignored .env.local
+# PowerShell: Copy-Item .env.example .env.local  then edit .env.local
 ```
 
 **Optional tests:** `pip install -r requirements-dev.txt` then `pytest`.
@@ -158,7 +158,7 @@ npm run dev
 ### Docker (all-in-one)
 
 ```bash
-cp .env.example .env   # add OPENAI_API_KEY
+# Set OPENAI_API_KEY in the shell or a gitignored .env / .env.local (see .env.example)
 docker compose up --build
 ```
 
@@ -167,6 +167,8 @@ UI `:3000`, API `:8000`, data persisted in `./data`. See **[DEPLOYMENT.md](DEPLO
 ### Environment variables
 
 Summarized in **`.env.example`** (root) and **`web/.env.example`**. Highlights: `OPENAI_API_KEY`, `KA_CORS_ORIGINS`, `KA_ENV` (hide OpenAPI in prod), `NEXT_PUBLIC_API_URL`.
+
+**Python / API:** the process environment wins (e.g. Render). Then **`.env`**, then **`.env.local`** overrides values the process did not set (both gitignored). Never commit real keys.
 
 ---
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from app.ingestion.loader import get_default_raw_dir
 from app.persistence import chat_store, document_manifest
 from app.retrieval.vector_store import get_default_faiss_folder
 from app.services import chat_service, debug_service, index_service, message_service, perf_service, upload_service
+from app.services.library_delete import delete_library_document
 
 APP_NAME = message_service.APP_NAME
 EMPTY_STATE_VALUE_PROP = message_service.EMPTY_STATE_VALUE_PROP
@@ -151,8 +153,8 @@ def sync_documents_manual(
 
 
 def read_settings() -> tuple[int, int, int]:
-    cs = int(st.session_state.get("settings_chunk_size", st.session_state.get("adv_chunk_size", 500)))
-    co = int(st.session_state.get("settings_chunk_overlap", st.session_state.get("adv_chunk_overlap", 80)))
+    cs = int(st.session_state.get("settings_chunk_size", st.session_state.get("adv_chunk_size", 900)))
+    co = int(st.session_state.get("settings_chunk_overlap", st.session_state.get("adv_chunk_overlap", 120)))
     tk = int(st.session_state.get("settings_top_k", st.session_state.get("adv_top_k", DEFAULT_TOP_K)))
     tk = max(1, min(SIDEBAR_TOP_K_MAX, tk))
     return cs, co, tk
@@ -545,6 +547,19 @@ def render_sidebar_chats() -> None:
     if st.button("New chat", key="ka_new_chat_sidebar", use_container_width=True, type="secondary"):
         new_chat()
         st.rerun()
+    if st.button(
+        "Delete this chat",
+        key="ka_delete_this_chat",
+        use_container_width=True,
+        help="Remove this conversation from history",
+    ):
+        chat_store.delete_session(cur)
+        nxt = chat_store.list_sessions(50)
+        st.session_state.active_chat_id = (
+            nxt[0]["id"] if nxt else chat_store.create_session()
+        )
+        reload_messages_from_store()
+        st.rerun()
     st.markdown('<div class="ka-side-sp"></div>', unsafe_allow_html=True)
 
 
@@ -588,11 +603,26 @@ def render_sidebar_documents_and_actions(
                 row.get("status") or document_manifest.file_health_status(faiss_folder, p.name)
             )
             badge = html.escape(_doc_status_badge(st_, row))
-            st.markdown(
-                f'<p class="ka-lib-file">{html.escape(p.name)} '
-                f'<span class="ka-lib-status">({badge})</span></p>',
-                unsafe_allow_html=True,
-            )
+            fc1, fc2 = st.columns([5, 1])
+            with fc1:
+                st.markdown(
+                    f'<p class="ka-lib-file">{html.escape(p.name)} '
+                    f'<span class="ka-lib-status">({badge})</span></p>',
+                    unsafe_allow_html=True,
+                )
+            with fc2:
+                del_key = f"ka_del_{hashlib.md5(p.name.encode('utf-8')).hexdigest()[:16]}"
+                if st.button("×", key=del_key, help=f"Remove {p.name} from library"):
+                    cs, co, _tk = read_settings()
+                    ok, msg = delete_library_document(
+                        raw_dir, faiss_folder, p.name, chunk_size=cs, chunk_overlap=co
+                    )
+                    if ok:
+                        st.session_state.kb_sync_fingerprint = (
+                            index_service.library_content_fingerprint(raw_dir)
+                        )
+                    st.toast((msg or ("Removed" if ok else "Could not remove"))[:200])
+                    st.rerun()
             note = row.get("user_facing_note")
             if not note and row.get("retrieval_quality_note") and row.get("retrieval_quality") == "weak":
                 note = row.get("retrieval_quality_note")
@@ -627,7 +657,7 @@ def render_sidebar_documents_and_actions(
             "Passage size",
             100,
             4000,
-            int(st.session_state.get("settings_chunk_size", 500)),
+            int(st.session_state.get("settings_chunk_size", 900)),
             step=50,
             help="Larger passages carry more context per match. Adjust only if needed.",
         )
@@ -635,7 +665,7 @@ def render_sidebar_documents_and_actions(
             "Passage overlap",
             0,
             2000,
-            int(st.session_state.get("settings_chunk_overlap", 80)),
+            int(st.session_state.get("settings_chunk_overlap", 120)),
             step=10,
             help="Shared text between passages. Usually leave as-is.",
         )

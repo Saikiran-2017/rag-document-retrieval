@@ -6,7 +6,12 @@ env/
 # Environment and secrets (never commit real API keys)
 .env
 .env.local
+.env.*
+!.env.example
 *.pem
+
+# Local eval console capture (may mirror answer previews)
+eval/_stdout*.txt
 
 # Python
 __pycache__/
@@ -42,3 +47,7 @@ data/raw/*
 !data/raw/sample_phase2.txt
 data/indexes/*
 !data/indexes/.gitkeep
+
+# Eval harness temp index
+eval/_work/
+eval/_report*.json
