@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "description": "Gold expectations for document QA eval; tune substrings if corpus wording changes.",
+  "chunk_size": 900,
+  "chunk_overlap": 120,
+  "top_k": 6,
+  "corpus_files": [
+    "fixtures/playbook_long.txt",
+    "fixtures/corp_finance.txt"
+  ],
+  "cases": [
+    {
+      "id": "broad_overview_purpose",
+      "category": "broad_overview",
+      "query": "What is this playbook mainly about, in plain language?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "blended"],
+        "refusal": false,
+        "answer_substrings_any": ["zephyr", "retrieval", "document", "internal"],
+        "retrieval_anchors_any": ["ZEPHYR-7", "ZEPHYR", "retrieval", "IngestPlane"],
+        "answer_substrings_must_not": []
+      }
+    },
+    {
+      "id": "summary_main_ideas",
+      "category": "summary",
+      "query": "Give a concise summary of the key ideas in the long internal playbook.",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "blended"],
+        "refusal": false,
+        "answer_substrings_any": ["layer", "ingest", "index", "query", "zephyr"],
+        "retrieval_anchors_any": ["IngestPlane", "IndexPlane", "QueryPlane", "ZEPHYR"],
+        "answer_substrings_must_not": []
+      }
+    },
+    {
+      "id": "section_topic_latency",
+      "category": "section_topic",
+      "query": "What does the playbook say about p99 latency requirements?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "blended"],
+        "refusal": false,
+        "answer_substrings_any": ["400", "four hundred", "latency", "p99", "millisecond", "ms"],
+        "retrieval_anchors_any": ["400", "p99", "QueryPlane", "latency"],
+        "answer_substrings_must_not": []
+      }
+    },
+    {
+      "id": "narrow_revenue_fact",
+      "category": "narrow_factual",
+      "query": "What was Acme Corp Q3 revenue in the finance flash?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "blended"],
+        "refusal": false,
+        "answer_substrings_any": ["47", "million", "000", "000,000"],
+        "retrieval_anchors_any": ["47", "Acme", "million", "Q3"],
+        "answer_substrings_must_not": []
+      }
+    },
+    {
+      "id": "narrow_ceo_name",
+      "category": "narrow_factual",
+      "query": "Who is the CEO of Acme Corp according to the uploaded finance text?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "blended"],
+        "refusal": false,
+        "answer_substrings_any": ["jane", "okonkwo", "chief executive"],
+        "retrieval_anchors_any": ["Jane", "Okonkwo", "CEO", "Acme"],
+        "answer_substrings_must_not": []
+      }
+    },
+    {
+      "id": "negative_not_in_docs_recipe",
+      "category": "negative",
+      "query": "According to my uploaded documents, what is the exact recipe for chocolate cake?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "general", "blended", "web"],
+        "refusal": true,
+        "answer_substrings_any": [],
+        "retrieval_anchors_any": [],
+        "answer_substrings_must_not": ["flour", "butter", "350°", "350f", "preheat"]
+      }
+    },
+    {
+      "id": "negative_mars_not_in_doc",
+      "category": "negative",
+      "query": "What year did humans land on Mars according to the internal playbook?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "general", "blended"],
+        "refusal": true,
+        "answer_substrings_any": [],
+        "retrieval_anchors_any": [],
+        "answer_substrings_must_not": ["2031", "2035", "2040", "2050"]
+      }
+    },
+    {
+      "id": "ambiguous_performance",
+      "category": "ambiguous",
+      "query": "How is performance discussed?",
+      "task_mode": "auto",
+      "expected": {
+        "mode_in": ["grounded", "blended"],
+        "refusal": false,
+        "answer_substrings_any": ["latency", "p99", "400", "hardware", "workload"],
+        "retrieval_anchors_any": ["latency", "p99", "400", "QueryPlane"],
+        "answer_substrings_must_not": []
+      }
+    }
+  ]
+}

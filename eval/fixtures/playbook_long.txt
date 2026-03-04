@@ -1,0 +1,21 @@
+# Internal playbook: retrieval stack rollout
+
+## Executive summary (SECTION_ALPHA)
+This playbook describes project codename ZEPHYR-7, a staged rollout of a retrieval-augmented assistant for internal operations. The goal is to keep answers tied to approved internal documents instead of model memory alone.
+
+## Architecture (SECTION_BETA)
+The system is described as three explicit layers for auditors:
+1) IngestPlane: uploads, parsing, and normalization into a raw library.
+2) IndexPlane: chunking, embeddings, and a FAISS vector index with BM25 hybrid fusion.
+3) QueryPlane: routing, retrieval gates, and grounded generation with numbered sources.
+
+These names are intentional test anchors for evaluation harnesses.
+
+## Reliability and performance (SECTION_GAMMA)
+Service level expectations for the QueryPlane state that p99 latency should remain below 400 milliseconds for typical single-user workloads on the reference hardware profile. If latency exceeds this budget, operators should reduce top_k or passage size before scaling out.
+
+## Support and contacts (SECTION_DELTA)
+For production incidents, page the on-call rotation using the standard PagerDuty route. This document does not define customer-facing SLAs.
+
+## Out of scope
+This playbook does not discuss Martian colonies, lunar bases, or interplanetary logistics. Those topics are intentionally absent.

@@ -1,0 +1,7 @@
+Acme Corp - internal finance flash (Q3)
+
+Revenue for the third quarter was forty-seven million USD (47,000,000), as filed with the internal controller.
+The chief executive officer is Jane Okonkwo, appointed effective 2024-03-15.
+The chief technology officer is Sam Rivera.
+
+This excerpt exists so eval cases can test narrow numeric and title extraction across a second file in the corpus.
