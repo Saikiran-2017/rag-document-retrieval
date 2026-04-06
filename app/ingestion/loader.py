@@ -13,6 +13,11 @@ from typing import Any, Literal
 
 import pdfplumber
 from docx import Document as DocxDocument
+from docx.oxml.ns import qn
+from docx.table import Table as DocxTable
+from docx.text.paragraph import Paragraph as DocxParagraph
+
+from app.ingestion.pdf_ocr_optional import try_ocr_pdf_page
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +61,68 @@ def get_default_raw_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "data" / "raw"
 
 
-def _normalize_text(raw: str | None) -> str:
-    """Turn None or odd whitespace into a single clean string."""
+def _normalize_line(raw: str | None) -> str:
+    """Collapse horizontal whitespace on one visual line."""
     if not raw:
         return ""
     return " ".join(raw.split())
+
+
+def _normalize_text(raw: str | None) -> str:
+    """
+    Normalize whitespace while preserving paragraph and line structure.
+
+    Blank lines separate paragraphs (joined with ``\\n\\n``). Non-blank lines that
+    were separated only by a single newline stay as ``\\n`` within a paragraph
+    (helps tables and reflowed PDF lines).
+    """
+    if not raw:
+        return ""
+    t = raw.replace("\r\n", "\n").replace("\r", "\n")
+    norm_lines = [_normalize_line(ln) for ln in t.split("\n")]
+    blocks: list[str] = []
+    cur: list[str] = []
+    for w in norm_lines:
+        if w == "":
+            if cur:
+                blocks.append("\n".join(cur))
+                cur = []
+        else:
+            cur.append(w)
+    if cur:
+        blocks.append("\n".join(cur))
+    return "\n\n".join(blocks)
+
+
+def _format_docx_table(table: DocxTable) -> str:
+    """Flatten a DOCX table to newline-separated rows, cells as 'a | b'."""
+    rows_out: list[str] = []
+    try:
+        for row in table.rows:
+            cells = [_normalize_line(c.text) for c in row.cells]
+            cells = [c for c in cells if c]
+            if cells:
+                rows_out.append(" | ".join(cells))
+    except Exception as exc:
+        logger.debug("DOCX table extraction issue: %s", exc)
+        return ""
+    return "\n".join(rows_out)
+
+
+def _pypdf_page_text(path: Path, page_index_0: int) -> str:
+    """Second-chance text for one PDF page (0-based index)."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return ""
+    try:
+        reader = PdfReader(str(path))
+        if page_index_0 < 0 or page_index_0 >= len(reader.pages):
+            return ""
+        return reader.pages[page_index_0].extract_text() or ""
+    except Exception as exc:
+        logger.debug("pypdf page %s of %s: %s", page_index_0 + 1, path.name, exc)
+        return ""
 
 
 def _file_type_for_path(path: Path) -> FileType:
@@ -86,13 +148,20 @@ def _load_pdf_pages(path: Path) -> list[IngestedDocument]:
 
     with pdfplumber.open(path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
+            raw = ""
             try:
                 raw = page.extract_text() or ""
             except Exception as exc:
                 logger.warning("PDF page %s in %s failed to extract: %s", i, path.name, exc)
-                continue
 
             text = _normalize_text(raw)
+            if not text:
+                raw2 = _pypdf_page_text(path, i - 1)
+                text = _normalize_text(raw2)
+            if not text:
+                raw3 = try_ocr_pdf_page(path, i)
+                text = _normalize_text(raw3) if raw3 else ""
+
             if not text:
                 continue
 
@@ -112,19 +181,27 @@ def _load_pdf_pages(path: Path) -> list[IngestedDocument]:
 
 
 def _load_docx_whole(path: Path) -> list[IngestedDocument]:
-    """Load entire DOCX as a single record (no native page boundaries)."""
+    """Load DOCX in document order: paragraphs and tables interleaved."""
     source_name = path.name
     file_type: FileType = "docx"
     stem = path.stem
 
     document = DocxDocument(path)
     parts: list[str] = []
-    for paragraph in document.paragraphs:
-        t = _normalize_text(paragraph.text)
-        if t:
-            parts.append(t)
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            para = DocxParagraph(child, document)
+            t = _normalize_line(para.text)
+            if t:
+                parts.append(t)
+        elif child.tag == qn("w:tbl"):
+            tbl = DocxTable(child, document)
+            block = _format_docx_table(tbl)
+            if block:
+                parts.append(block)
 
-    text = _normalize_text("\n".join(parts))
+    text = "\n\n".join(parts)
+    text = _normalize_text(text)
     if not text:
         return []
 
@@ -231,27 +308,3 @@ if __name__ == "__main__":
         print(
             "\n(No documents found. Add .pdf, .docx, or .txt files under data/raw/ and run again.)"
         )
-
-# Updated 2024-08-03
-
-# Updated 2024-08-30
-
-# Updated 2024-09-21
-
-# Updated 2024-10-15
-
-# Updated 2024-08-03
-
-# Updated 2024-08-30
-
-# Updated 2025-08-03
-
-# Updated 2025-08-30
-
-# Updated 2025-09-21
-
-# Updated 2025-10-15
-
-# Updated 2025-08-03
-
-# Updated 2025-08-30

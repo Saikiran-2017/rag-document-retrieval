@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.llm.query_intent import is_broad_document_overview_query, user_expects_document_grounding
+from app.llm.query_intent import (
+    is_broad_document_overview_query,
+    user_expects_document_grounding,
+    uses_relaxed_document_grounding_gate,
+)
 from app.services.chat_service import wants_no_retrieval_fastpath
 
 
@@ -24,3 +28,35 @@ def test_broad_overview_flag():
     assert is_broad_document_overview_query("What is this document about?")
     assert is_broad_document_overview_query("Summarize this file")
     assert not is_broad_document_overview_query("What is the revenue in Q3 per the table?")
+
+
+def test_relaxed_gate_gold_broad_and_ambiguous():
+    assert uses_relaxed_document_grounding_gate(
+        "What is this playbook mainly about, in plain language?"
+    )
+    assert uses_relaxed_document_grounding_gate(
+        "Give a concise summary of the key ideas in the long internal playbook."
+    )
+    assert uses_relaxed_document_grounding_gate("How is performance discussed?")
+
+
+def test_relaxed_gate_false_for_negative_eval_queries():
+    assert not uses_relaxed_document_grounding_gate(
+        "According to my uploaded documents, what is the exact recipe for chocolate cake?"
+    )
+    assert not uses_relaxed_document_grounding_gate(
+        "What year did humans land on Mars according to the internal playbook?"
+    )
+
+
+def test_eval_gold_queries_expect_document_grounding():
+    assert user_expects_document_grounding(
+        "What is this playbook mainly about, in plain language?"
+    )
+    assert user_expects_document_grounding("What was Acme Corp Q3 revenue in the finance flash?")
+    assert user_expects_document_grounding(
+        "What does the playbook say about p99 latency requirements?"
+    )
+    assert not wants_no_retrieval_fastpath(
+        "What is this playbook mainly about, in plain language?"
+    )

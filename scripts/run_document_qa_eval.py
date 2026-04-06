@@ -29,12 +29,14 @@ if str(ROOT) not in sys.path:
 
 def _preflight_openai() -> str | None:
     """Return error message if the key is missing or rejected; None if OK."""
+    from app.env_loader import is_openai_key_placeholder
+
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not key:
         return "OPENAI_API_KEY is not set."
-    lower = key.lower()
-    if "sk-your" in lower or "your-api-key" in lower or "placeholder" in lower:
-        return "OPENAI_API_KEY appears to be a template placeholder, not a real key."
+    bad, why = is_openai_key_placeholder(key)
+    if bad:
+        return f"OPENAI_API_KEY appears to be a template placeholder ({why})."
     if len(key) < 24:
         return "OPENAI_API_KEY is too short to be valid."
     try:
@@ -78,15 +80,46 @@ def main() -> int:
         help="Temp corpus/index directory (default: eval/_work)",
     )
     parser.add_argument("--json-report", type=Path, default=None, help="Write machine-readable summary")
+    parser.add_argument(
+        "--verbose-key",
+        action="store_true",
+        help="Print safe OPENAI_API_KEY diagnostics (masked); does not print the secret.",
+    )
     args = parser.parse_args()
 
-    from app.env_loader import load_repo_dotenv
+    from app.env_loader import describe_openai_key_for_diagnostics, load_repo_dotenv
 
     load_repo_dotenv(ROOT)
+
+    if args.verbose_key or os.environ.get("KA_EVAL_KEY_DIAG", "").strip().lower() in ("1", "true", "yes"):
+        diag = describe_openai_key_for_diagnostics(ROOT)
+        print("=== OPENAI_API_KEY diagnostics (safe) ===", file=sys.stderr)
+        print(json.dumps(diag, indent=2), file=sys.stderr)
 
     pre = _preflight_openai()
     if pre:
         print(f"ERROR: {pre}", file=sys.stderr)
+        if not args.verbose_key and os.environ.get("KA_EVAL_KEY_DIAG", "").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            snap = describe_openai_key_for_diagnostics(ROOT)
+            print(
+                "Safe key hint: "
+                + json.dumps(
+                    {
+                        "effective_key_present": snap["effective_key_present"],
+                        "effective_key_masked": snap["effective_key_masked"],
+                        "placeholder_heuristic_hits": snap["placeholder_heuristic_hits"],
+                        "dotenv_files": snap["dotenv_files"],
+                        "inferred_value_source": snap["inferred_value_source"],
+                    },
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+            )
+            print("Re-run with --verbose-key for full JSON.", file=sys.stderr)
         if args.json_report:
             _write_blocked_report(args.json_report, pre)
             print(f"Wrote blocked report to {args.json_report}", file=sys.stderr)

@@ -34,13 +34,17 @@ DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 # FAISS L2 distance on retrieved chunks: lower is closer. Above this, treat as weak match.
 USEFUL_RETRIEVAL_MAX_L2 = 1.22
 # Hybrid (BM25 + vector + RRF): balance precision vs recall for doc QA (broad questions sit higher in L2).
-_HYBRID_MAX_L2 = 1.1
-_HYBRID_MIN_RRF = 0.011
+_HYBRID_MAX_L2 = 1.16
+_HYBRID_MIN_RRF = 0.0085
 _HYBRID_VERY_GOOD_L2 = 0.88
 # Document tasks (summarize / compare) allow slightly looser top-hit retrieval.
 _HYBRID_TASK_MAX_L2 = 1.1
 _HYBRID_TASK_MIN_RRF = 0.012
 _HYBRID_TASK_VERY_GOOD_L2 = 0.9
+# Broad overview / vague doc-shaped QA: top hit L2 is often higher; RRF still shows keyword fit.
+_HYBRID_BROAD_QA_MAX_L2 = 1.22
+_HYBRID_BROAD_QA_MIN_RRF = 0.006
+_HYBRID_BROAD_QA_VERY_GOOD_L2 = 0.96
 
 UNKNOWN_PHRASE = "I don't know based on the provided documents."
 
@@ -56,6 +60,21 @@ Do not:
 - Invent that you read specific files or quoted material.
 
 If you are unsure or the question is outside your knowledge, say so briefly and suggest what would help (e.g. rephrase, add constraints)."""
+
+# Used when the user clearly asked about their library but retrieval did not surface
+# reliable passages (or web is disabled/thin). Prevents unrelated general knowledge answers.
+DOCUMENT_ABSTAIN_GENERAL_PROMPT = f"""You are a careful assistant in a document Q&A app.
+
+The user is asking about their uploaded library, but no reliable passages were retrieved for this question (or search could not confirm a match).
+
+Rules:
+- Reply in one or two short sentences.
+- Say clearly that you cannot find this in their documents / uploaded materials. You may use wording like: {UNKNOWN_PHRASE}
+- Do NOT answer using outside knowledge: no recipes, tutorials, trivia, or invented facts that pretend to come from their files.
+- Do NOT fabricate citations, file names, or quotes.
+- If the question is impossible to answer without external knowledge, say their materials do not contain it and stop.
+
+Tone: neutral and helpful; no guilt-tripping."""
 
 GROUNDING_SYSTEM_PROMPT = f"""You are a precise assistant for document Q&A.
 
@@ -87,6 +106,9 @@ class SourceRef:
     source_name: str
     page_label: str
     file_path: str
+    # Optional UI helpers (safe for older clients to ignore).
+    source_label: str = ""
+    snippet: str = ""
 
 
 @dataclass(frozen=True)
@@ -111,18 +133,42 @@ def _meta_str(meta: dict[str, Any], key: str) -> str:
     return "" if v is None else str(v)
 
 
+def _source_label(source_name: str, page_label: str) -> str:
+    sn = (source_name or "").strip()
+    if sn.lower().endswith((".pdf", ".txt", ".docx")):
+        sn = sn.rsplit(".", 1)[0]
+    pl = (page_label or "").strip()
+    if not pl or pl.lower() in ("n/a", "none", "-"):
+        return sn or "Source"
+    return f"{sn or 'Source'} · p.{pl}"
+
+
+def _snippet(text: str, *, limit: int = 220) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    t = " ".join(t.split())
+    if len(t) <= limit:
+        return t
+    return t[: limit - 1].rstrip() + "…"
+
+
 def chunks_to_source_refs(chunks: list[RetrievedChunk]) -> tuple[SourceRef, ...]:
     """Build citation rows from retrieved chunks (``source_number`` aligns with [SOURCE N])."""
     refs: list[SourceRef] = []
     for i, h in enumerate(chunks, start=1):
         m = h.metadata
+        src = _meta_str(m, "source_name")
+        pl = _normalize_page_label(m)
         refs.append(
             SourceRef(
                 source_number=i,
                 chunk_id=_meta_str(m, "chunk_id"),
-                source_name=_meta_str(m, "source_name"),
-                page_label=_normalize_page_label(m),
+                source_name=src,
+                page_label=pl,
                 file_path=_meta_str(m, "file_path"),
+                source_label=_source_label(src, pl),
+                snippet=_snippet(h.page_content),
             )
         )
     return tuple(refs)
@@ -354,6 +400,30 @@ def generate_general_answer(
     return out if out else "I don't have a response right now."
 
 
+def generate_document_abstain_answer(
+    query: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+    temperature: float = 0.2,
+) -> str:
+    """Short refusal when document grounding was expected but retrieval is weak or empty."""
+    if not query.strip():
+        raise ValueError("Query must be non-empty.")
+    model = create_chat_llm(
+        model=chat_model,
+        temperature=temperature,
+        max_tokens=min(220, _GENERAL_ANSWER_MAX_TOKENS),
+    )
+    messages = [
+        SystemMessage(content=DOCUMENT_ABSTAIN_GENERAL_PROMPT),
+        HumanMessage(content=query.strip()),
+    ]
+    logger.info("Calling chat model for document-scope abstain (weak retrieval)")
+    response = model.invoke(messages)
+    out = _coerce_text_content(response.content).strip()
+    return out if out else UNKNOWN_PHRASE
+
+
 def retrieval_is_useful(
     hits: list[RetrievedChunk],
     *,
@@ -372,6 +442,7 @@ def hybrid_retrieval_is_useful(
     hits: list[RetrievedChunk],
     *,
     for_document_task: bool = False,
+    for_broad_qa: bool = False,
 ) -> bool:
     """
     Gate after hybrid RRF + rerank: require vector similarity and fusion mass,
@@ -386,6 +457,10 @@ def hybrid_retrieval_is_useful(
         max_l2 = _HYBRID_TASK_MAX_L2
         min_rrf = _HYBRID_TASK_MIN_RRF
         very_good = _HYBRID_TASK_VERY_GOOD_L2
+    elif for_broad_qa:
+        max_l2 = _HYBRID_BROAD_QA_MAX_L2
+        min_rrf = _HYBRID_BROAD_QA_MIN_RRF
+        very_good = _HYBRID_BROAD_QA_VERY_GOOD_L2
     else:
         max_l2 = _HYBRID_MAX_L2
         min_rrf = _HYBRID_MIN_RRF
@@ -399,23 +474,62 @@ def hybrid_retrieval_is_useful(
 
 # Stricter than hybrid_retrieval_is_useful: when a file is only partially trusted
 # (ready_limited) or the library has no fully healthy file, require a clearly strong match.
-_LIMITED_QA_MAX_L2 = 0.86
-_LIMITED_QA_MIN_RRF = 0.012
+_LIMITED_QA_MAX_L2 = 0.92
+_LIMITED_QA_MIN_RRF = 0.009
 _LIMITED_TASK_MAX_L2 = 0.92
 _LIMITED_TASK_MIN_RRF = 0.013
+# ready_limited + broad/summary-style QA: allow slightly weaker top vector if fusion mass exists.
+_LIMITED_BROAD_QA_MAX_L2 = 1.08
+_LIMITED_BROAD_QA_MIN_RRF = 0.006
+# When many trusted hits agree on the same source, allow a last-step loosening for ready_limited.
+_LIMITED_SAME_SOURCE_COHERE_MIN_HITS = 3
+_LIMITED_SAME_SOURCE_COHERE_MAX_L2 = 1.15
+_LIMITED_SAME_SOURCE_COHERE_MIN_RRF = 0.005
+_LIMITED_QA_COHERE_MIN_HITS = 2
+_LIMITED_QA_COHERE_MAX_L2 = 1.02
+
+
+def hybrid_limited_same_source_fallback(
+    hit: RetrievedChunk,
+    *,
+    same_source_hits_in_window: int,
+) -> bool:
+    """Extra gate for ready_limited libraries when retrieval clusters on one document."""
+    if same_source_hits_in_window < _LIMITED_SAME_SOURCE_COHERE_MIN_HITS:
+        return False
+    d = float(hit.distance)
+    rrf = float(hit.metadata.get("rrf_score", 0.0) or 0.0)
+    if rrf <= 0:
+        return d <= USEFUL_RETRIEVAL_MAX_L2
+    return d <= _LIMITED_SAME_SOURCE_COHERE_MAX_L2 and rrf >= _LIMITED_SAME_SOURCE_COHERE_MIN_RRF
 
 
 def hybrid_hit_strong_for_limited_corpora(
     hit: RetrievedChunk,
     *,
     for_document_task: bool = False,
+    for_broad_qa: bool = False,
+    same_source_hits_in_window: int | None = None,
 ) -> bool:
     """True when the top hit is strong enough to ground answers for weak-trust documents."""
     d = float(hit.distance)
     rrf = float(hit.metadata.get("rrf_score", 0.0) or 0.0)
     if for_document_task:
         return d <= _LIMITED_TASK_MAX_L2 and rrf >= _LIMITED_TASK_MIN_RRF
+    if for_broad_qa:
+        if rrf > 0:
+            return d <= _LIMITED_BROAD_QA_MAX_L2 and rrf >= _LIMITED_BROAD_QA_MIN_RRF
+        return d <= USEFUL_RETRIEVAL_MAX_L2
     if rrf > 0:
+        # Narrow QA sometimes yields only ~2 top hits from one source after chunk/format changes.
+        # If the retrieval coheres on the same document, allow a slightly weaker top vector hit.
+        if (
+            same_source_hits_in_window is not None
+            and same_source_hits_in_window >= _LIMITED_QA_COHERE_MIN_HITS
+            and d <= _LIMITED_QA_COHERE_MAX_L2
+            and rrf >= _LIMITED_QA_MIN_RRF
+        ):
+            return True
         return d <= _LIMITED_QA_MAX_L2 and rrf >= _LIMITED_QA_MIN_RRF
     return d <= USEFUL_RETRIEVAL_MAX_L2
 
@@ -540,6 +654,27 @@ def stream_general_answer_tokens(
     )
     messages = [
         SystemMessage(content=GENERAL_ASSISTANT_PROMPT),
+        HumanMessage(content=query.strip()),
+    ]
+    yield from _yield_llm_stream(model, messages)
+
+
+def stream_document_abstain_tokens(
+    query: str,
+    *,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+    temperature: float = 0.2,
+) -> Iterator[str]:
+    if not query.strip():
+        yield ""
+        return
+    model = create_chat_llm(
+        model=chat_model,
+        temperature=temperature,
+        max_tokens=min(220, _GENERAL_ANSWER_MAX_TOKENS),
+    )
+    messages = [
+        SystemMessage(content=DOCUMENT_ABSTAIN_GENERAL_PROMPT),
         HumanMessage(content=query.strip()),
     ]
     yield from _yield_llm_stream(model, messages)

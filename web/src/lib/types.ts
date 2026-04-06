@@ -6,6 +6,8 @@ export interface SourceRef {
   source_name: string;
   page_label: string;
   file_path: string;
+  source_label?: string;
+  snippet?: string;
 }
 
 export interface ChatAnswer {

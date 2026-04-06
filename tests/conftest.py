@@ -16,7 +16,6 @@ sys.modules.setdefault("streamlit", _st)
 _stubs = (
     "pdfplumber",
     "pypdf",
-    "docx",
     "langchain_openai",
     "faiss",
     "faiss_cpu",

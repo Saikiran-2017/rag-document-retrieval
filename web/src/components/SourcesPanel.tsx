@@ -24,11 +24,15 @@ export function SourcesPanel({ sources }: { sources: SourceRef[] }) {
               <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded bg-stone-100 px-1 text-[11px] font-semibold tabular-nums text-stone-600">
                 {s.source_number}
               </span>
-              <span className="text-sm font-medium text-stone-900">{s.source_name}</span>
-              {s.page_label ? (
-                <span className="text-xs text-stone-500">{s.page_label}</span>
-              ) : null}
+              <span className="text-sm font-medium text-stone-900">
+                {s.source_label || s.source_name}
+              </span>
             </div>
+            {s.snippet ? (
+              <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-stone-600">
+                {s.snippet}
+              </p>
+            ) : null}
             {s.file_path ? (
               <p
                 className="mt-1.5 font-mono text-[11px] leading-tight text-stone-400"

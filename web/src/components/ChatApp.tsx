@@ -170,6 +170,9 @@ export function ChatApp() {
 
   const handleDeleteChat = async (id: string) => {
     try {
+      if (!window.confirm("Delete this chat? This does not delete your uploaded documents.")) {
+        return;
+      }
       await deleteChat(id);
       const list = await listChats();
       setSessions(list);
@@ -186,6 +189,48 @@ export function ChatApp() {
     } catch (e) {
       setBanner(e instanceof Error ? e.message : "Delete failed");
     }
+  };
+
+  const handleClearConversation = async () => {
+    if (!activeSessionId) return;
+    setBanner(null);
+    try {
+      if (
+        !window.confirm(
+          "Clear this conversation? This starts a new chat and keeps your uploaded documents.",
+        )
+      ) {
+        return;
+      }
+      const old = activeSessionId;
+      await deleteChat(old);
+      const c = await createChat();
+      const list = await listChats();
+      setSessions(list);
+      setActiveSessionId(c.id);
+      setMessages([]);
+      localStorage.setItem(STORAGE_KEY, c.id);
+    } catch (e) {
+      setBanner(e instanceof Error ? e.message : "Could not clear conversation");
+    }
+  };
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.role !== "assistant" || !m.streaming) return m;
+        const c = m.content.trim();
+        return {
+          ...m,
+          streaming: false,
+          content: c || "Stopped.",
+          meta: { ...(m.meta ?? {}), status_note: "Stopped by you." },
+        };
+      }),
+    );
   };
 
   const handleUpload = async (files: FileList | null) => {
@@ -224,6 +269,9 @@ export function ChatApp() {
     setBanner(null);
     setBusy(true);
     try {
+      if (!window.confirm(`Remove "${filename}" from your library?`)) {
+        return;
+      }
       const res = await deleteDocument(filename);
       setSyncHint(res.message ?? "Removed from library.");
       await refreshDocuments();
@@ -410,6 +458,9 @@ export function ChatApp() {
           <div className="flex min-h-0 flex-1 flex-col">{mainBody}</div>
           <Composer
             onSend={sendMessage}
+            onStop={handleStop}
+            onNewChat={handleNewChat}
+            onClearConversation={handleClearConversation}
             disabled={streaming || busy || !activeSessionId}
             isStreaming={streaming}
             taskMode={taskMode}

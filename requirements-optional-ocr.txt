@@ -1,0 +1,5 @@
+# Optional: scanned PDF fallback when RAG_ENABLE_PDF_OCR=1
+# Also install Tesseract (https://github.com/tesseract-ocr/tesseract) and Poppler for pdf2image.
+Pillow>=10.0.0
+pdf2image>=1.17.0
+pytesseract>=0.3.10

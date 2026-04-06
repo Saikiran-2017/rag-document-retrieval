@@ -13,16 +13,20 @@ _DOCUMENT_SCOPE = re.compile(
     r"key points?|main points?|bullet points?|takeaways?|highlights?|"
     r"main topics?|key topics?|topics?\b|themes?\b|outline|gist|overview|"
     r"big picture|high[-\s]?level|tl;?dr|"
+    r"playbook|internal|handbook|memo|flash|brief|"
+    r"revenue|earnings|profit|loss|quarter|q[1-4]\b|fiscal|ceo|cfo|corp|"
+    r"finance|financial|acme|"
     r"extract|according to|from the|in the document|this (file|doc|pdf|paper)|"
-    r"what does (this|the|it)\s+(\w+\s+)?(file|document)\s+discuss|"
-    r"what (is|are)\s+(this|the|it|they)\s+about|"
+    r"what does (this|the|it|my)\s+(\w+\s+){0,4}(file|document|playbook)\s+"
+    r"(say|discuss|cover|mention)|"
+    r"what (is|are)\s+(this|the|it|they)\s+(\w+\s+){0,3}about|"
     r"what (is|are)\s+the\s+(main|key)\s+|"
     r"purpose\s+of\s+(this|the|my)|what\s+is\s+the\s+purpose|"
     r"central\s+theme|thesis|argument|conclusion|introduction|"
     r"explain\s+(this|the)\s+(document|file)|"
     r"describe\s+(this|the)\s+(document|file)|"
     r"performance|latency|latencies|throughput|benchmark|metric|metrics|"
-    r"sla\b|requirements?|p99|discussed|discussion"
+    r"sla\b|requirements?|p99|discussed|discussion|plain language"
     r")\b",
     re.I,
 )
@@ -61,3 +65,33 @@ def is_broad_document_overview_query(query: str) -> bool:
     if len(q) < 6:
         return False
     return bool(_BROAD_OVERVIEW.search(q))
+
+
+def uses_relaxed_document_grounding_gate(query: str) -> bool:
+    """
+    Use looser hybrid + ready_limited gates (still require non-empty trusted hits).
+
+    Covers broad/summary-style questions and vague \"how is X discussed\" doc queries
+    where top-hit L2 is often higher but RRF / multi-chunk support is still strong.
+
+    Excludes narrow fact lookups (handled by strict gate) and does not key off
+    negative/absurd topics.
+    """
+    if is_broad_document_overview_query(query):
+        return True
+    q = (query or "").strip().lower()
+    if len(q) < 10:
+        return False
+    perf = bool(
+        re.search(
+            r"\b(performance|latency|p99|throughput|workload|sla|benchmark|metrics?|reliability)\b",
+            q,
+        )
+    )
+    vague = bool(
+        re.search(
+            r"\b(how|what)\b.+\b(discussed|discussion|covered|addressed|talked\s+about)\b",
+            q,
+        )
+    )
+    return perf and vague

@@ -16,15 +16,21 @@ from app.llm.generator import (
     GroundedAnswer,
     chunks_to_source_refs,
     generate_blended_answer,
+    generate_document_abstain_answer,
     generate_general_answer,
     generate_grounded_answer,
     generate_web_grounded_answer,
     stream_blended_answer_tokens,
+    stream_document_abstain_tokens,
     stream_general_answer_tokens,
     stream_grounded_answer_tokens,
     stream_web_grounded_answer_tokens,
 )
-from app.llm.query_intent import is_broad_document_overview_query, user_expects_document_grounding
+from app.llm.query_intent import (
+    is_broad_document_overview_query,
+    user_expects_document_grounding,
+    uses_relaxed_document_grounding_gate,
+)
 from app.llm.query_rewrite import rewrite_for_retrieval
 from app.retrieval.context_selection import (
     hybrid_pool_size,
@@ -32,7 +38,13 @@ from app.retrieval.context_selection import (
     select_generation_context,
 )
 from app.retrieval.hybrid_retrieve import hybrid_retrieve, merge_hybrid_hit_pools
-from app.retrieval.vector_store import RetrievedChunk, faiss_vector_count
+from app.retrieval.vector_store import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_INDEX_NAME,
+    RetrievedChunk,
+    faiss_index_files_exist,
+    faiss_vector_count,
+)
 from app.services import debug_service, document_health, index_service
 from app.services.perf_service import record_phase_ms, timed_phase
 from app.services.web_search_service import prepare_web_for_generation, web_results_strong_enough
@@ -174,6 +186,36 @@ def safe_general_answer(query: str) -> tuple[str, str | None]:
         return MSG_SERVICE_UNAVAILABLE, debug_service.short_exc(exc)
 
 
+def safe_document_abstain_answer(query: str) -> tuple[str, str | None]:
+    """When the user expected library-backed answers but retrieval is weak; never raises."""
+    try:
+        return generate_document_abstain_answer(query), None
+    except Exception as exc:
+        return UNKNOWN_PHRASE, debug_service.short_exc(exc)
+
+
+def _general_or_abstain(query: str) -> tuple[str, str | None]:
+    """General chat only when the question is not clearly document-scoped."""
+    if user_expects_document_grounding(query):
+        return safe_document_abstain_answer(query)
+    return safe_general_answer(query)
+
+
+def _hit_debug_rows(hits: list[RetrievedChunk], limit: int = 8) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for i, h in enumerate(hits[:limit]):
+        rows.append(
+            {
+                "rank": i,
+                "source": str(h.metadata.get("source_name") or ""),
+                "l2": round(float(h.distance), 4),
+                "rrf": round(float(h.metadata.get("rrf_score", 0) or 0), 5),
+                "preview": ((h.page_content or "")[:120]).replace("\n", " "),
+            }
+        )
+    return rows
+
+
 def _finalize_answer(turn: AssistantTurn, **dbg: Any) -> AssistantTurn:
     if debug_service.debug_enabled():
         debug_service.merge(**dbg)
@@ -255,8 +297,17 @@ def _answer_user_query_impl(
     chunk_overlap: int,
     top_k: int,
 ) -> AssistantTurn:
+    debug_service.log_retrieval_event(
+        "turn_begin",
+        raw_dir=str(raw_dir.resolve()),
+        faiss_folder=str(faiss_folder.resolve()),
+        index_on_disk=faiss_index_files_exist(faiss_folder, index_name=DEFAULT_INDEX_NAME),
+        embedding_model=DEFAULT_EMBEDDING_MODEL,
+        top_k=int(top_k),
+    )
+
     if not index_service.list_raw_files(raw_dir):
-        text, gerr = safe_general_answer(query)
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_no_library",
@@ -275,7 +326,8 @@ def _answer_user_query_impl(
         chunk_overlap=chunk_overlap,
     )
     if not ok:
-        text, gerr = safe_general_answer(query)
+        debug_service.log_retrieval_event("index_sync_failed", sync_message=_sync_msg[:300])
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=MSG_LIBRARY_UNAVAILABLE),
             routing="general_sync_fallback",
@@ -321,7 +373,7 @@ def _answer_user_query_impl(
                 retrieval_load_exception=debug_service.short_exc(exc),
                 retrieval_fallback_to_general=True,
             )
-        text, gerr = safe_general_answer(query)
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_retrieval_failed",
@@ -332,7 +384,8 @@ def _answer_user_query_impl(
         )
 
     if nvec == 0:
-        text, gerr = safe_general_answer(query)
+        debug_service.log_retrieval_event("empty_vector_index", faiss_folder=str(faiss_folder.resolve()))
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_empty_index",
@@ -342,9 +395,17 @@ def _answer_user_query_impl(
             exception_summary=gerr,
         )
 
+    debug_service.log_retrieval_event(
+        "index_loaded",
+        vector_count=int(nvec),
+        faiss_folder=str(faiss_folder.resolve()),
+    )
+
     base_pool = hybrid_pool_size(nvec, int(top_k))
     broad_overview = is_broad_document_overview_query(query)
-    if broad_overview:
+    relaxed_doc_gate = uses_relaxed_document_grounding_gate(query)
+    wide_retrieval = broad_overview or relaxed_doc_gate
+    if wide_retrieval:
         k_pool = min(nvec, max(base_pool, 22))
         kv = min(nvec, max(32, min(48, nvec)))
     else:
@@ -362,8 +423,12 @@ def _answer_user_query_impl(
                 k_vector=kv,
                 k_bm25=kv,
             )
-            if broad_overview:
+            if wide_retrieval:
                 boost_q = f"{rewritten} {_DOC_OVERVIEW_RETRIEVAL_BOOST}".strip()
+                if relaxed_doc_gate and not broad_overview:
+                    boost_q = (
+                        f"{boost_q} performance latency p99 workload reliability metrics discussion"
+                    ).strip()
                 pool_b = hybrid_retrieve(
                     store,
                     boost_q,
@@ -373,26 +438,50 @@ def _answer_user_query_impl(
                 )
                 pool_hits = merge_hybrid_hit_pools(pool_hits, pool_b)
             ranked_hits = rerank_hybrid_hits(pool_hits)
-            ranked_hits = document_health.filter_trusted_retrieval_hits(faiss_folder, ranked_hits)
-            doc_good = document_health.allow_document_grounding(faiss_folder, ranked_hits)
+            n_after_rerank = len(ranked_hits)
+            trusted_hits = document_health.filter_trusted_retrieval_hits(faiss_folder, ranked_hits)
+            doc_good, gate_reason = document_health.explain_allow_document_grounding(
+                faiss_folder, trusted_hits, relaxed_doc_qa=relaxed_doc_gate
+            )
             hits = (
                 select_generation_context(
-                    ranked_hits,
+                    trusted_hits,
                     mode="qa",
                     top_k=int(top_k),
                     nvec=nvec,
-                    broad_document_question=broad_overview,
+                    broad_document_question=broad_overview or relaxed_doc_gate,
                 )
                 if doc_good
                 else []
             )
+            debug_service.log_retrieval_event(
+                "retrieval_hybrid_done",
+                user_query_preview=query[:200],
+                rewritten_query=rewritten[:300],
+                broad_overview=broad_overview,
+                wide_retrieval=wide_retrieval,
+                relaxed_doc_gate=relaxed_doc_gate,
+                pool_size=len(pool_hits),
+                after_rerank=n_after_rerank,
+                after_trust_filter=len(trusted_hits),
+                context_chunks_selected=len(hits),
+                doc_grounding_allowed=doc_good,
+                grounding_gate_reason=gate_reason,
+                top_pool_hits=_hit_debug_rows(pool_hits, 8),
+                top_ranked_pre_trust=_hit_debug_rows(ranked_hits, 8),
+                top_trusted_hits=_hit_debug_rows(trusted_hits, 8),
+            )
+            ranked_hits = trusted_hits
     except Exception as exc:
         if debug_service.debug_enabled():
             debug_service.merge(
                 retrieval_query_exception=debug_service.short_exc(exc),
                 retrieval_fallback_to_general=True,
             )
-        text, gerr = safe_general_answer(query)
+        debug_service.log_retrieval_event(
+            "retrieval_exception", error=debug_service.short_exc(exc)
+        )
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_retrieval_failed",
@@ -424,6 +513,24 @@ def _answer_user_query_impl(
             web_snippet_count=len(web_snippets_list),
             web_results_strong=web_strong,
         )
+
+    if doc_good and hits:
+        _route = "grounded_or_blended"
+    elif doc_good and not hits:
+        _route = "doc_allowed_empty_context"
+    elif web_snippets_list and web_strong:
+        _route = "web_or_blend"
+    else:
+        _route = "general_weak_or_abstain"
+    debug_service.log_retrieval_event(
+        "routing_decision",
+        route=_route,
+        doc_grounding_allowed=doc_good,
+        context_hits_for_llm=len(hits),
+        web_strong=web_strong,
+        web_snippet_count=len(web_snippets_list),
+        llm_gets_grounded_prompt=bool(doc_good and hits),
+    )
 
     def _gen_web(note: str | None = None) -> AssistantTurn:
         if stream:
@@ -516,7 +623,11 @@ def _answer_user_query_impl(
                         grounded_generation_exception=debug_service.short_exc(exc),
                         grounded_fallback_to_general=True,
                     )
-                text, gerr = safe_general_answer(query)
+                text, gerr = (
+                    safe_document_abstain_answer(query)
+                    if user_expects_document_grounding(query)
+                    else safe_general_answer(query)
+                )
                 exc_sum = f"{debug_service.short_exc(exc)} | {gerr}" if gerr else debug_service.short_exc(exc)
                 return _finalize_answer(
                     AssistantTurn(mode="general", text=text, assistant_note=MSG_GROUNDED_FALLBACK_NOTE),
@@ -548,7 +659,10 @@ def _answer_user_query_impl(
                 fallback_to_general=True,
             )
         if web_snippets_list:
-            text, gerr = safe_general_answer(query)
+            if user_expects_document_grounding(query):
+                text, gerr = safe_document_abstain_answer(query)
+            else:
+                text, gerr = safe_general_answer(query)
             return _finalize_answer(
                 AssistantTurn(
                     mode="general",
@@ -564,7 +678,7 @@ def _answer_user_query_impl(
     except Exception as exc:
         if debug_service.debug_enabled():
             debug_service.merge(generation_route_exception=debug_service.short_exc(exc))
-        text, gerr = safe_general_answer(query)
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=MSG_GROUNDED_FALLBACK_NOTE),
             routing="route_generation_failed",
@@ -574,13 +688,16 @@ def _answer_user_query_impl(
             exception_summary=gerr or debug_service.short_exc(exc),
         )
 
+    doc_scope = user_expects_document_grounding(query)
     if stream:
+        _stream_fn = stream_document_abstain_tokens if doc_scope else stream_general_answer_tokens
+
         return _finalize_answer(
             AssistantTurn(
                 mode="general",
                 text="",
                 assistant_note="No strong document match and no web results; general answer only.",
-                stream_tokens=lambda: stream_general_answer_tokens(query),
+                stream_tokens=lambda: _stream_fn(query),
             ),
             routing="general_weak_no_web",
             retrieval_ran=True,
@@ -588,7 +705,10 @@ def _answer_user_query_impl(
             fallback_to_general=True,
             exception_summary=None,
         )
-    text, gerr = safe_general_answer(query)
+    if doc_scope:
+        text, gerr = safe_document_abstain_answer(query)
+    else:
+        text, gerr = safe_general_answer(query)
     return _finalize_answer(
         AssistantTurn(
             mode="general",
@@ -654,7 +774,7 @@ def answer_user_query(
     except Exception as exc:
         if debug_service.debug_enabled():
             debug_service.merge(unhandled_answer_exception=debug_service.short_exc(exc))
-        text, gerr = safe_general_answer(query)
+        text, gerr = _general_or_abstain(query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_unhandled_fallback",

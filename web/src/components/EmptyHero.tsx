@@ -33,6 +33,14 @@ export function EmptyHero({
         <p className="ka-text-balance mt-3 max-w-md text-sm leading-relaxed text-stone-500">
           {HERO_BEST_FOR}
         </p>
+        <div className="mt-7 w-full max-w-md rounded-2xl border border-stone-200/80 bg-white/70 px-4 py-3 text-left text-sm leading-relaxed text-stone-600 shadow-sm shadow-stone-900/[0.03]">
+          <p className="font-medium text-stone-800">Quick start</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px] leading-relaxed">
+            <li>Upload documents in the sidebar</li>
+            <li>Click <span className="font-medium text-stone-800">Sync documents</span></li>
+            <li>Ask a question here (answers will cite sources when grounded)</li>
+          </ol>
+        </div>
         <p className="mt-12 text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-400">
           Try asking
         </p>

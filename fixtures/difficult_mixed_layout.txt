@@ -1,0 +1,16 @@
+CONFIDENTIAL — Q4 OPERATIONS REVIEW (fixture for Phase 22 robustness tests)
+
+Executive summary
+This section
+wraps badly across
+lines for testing reflow.
+
+FINANCIAL SNAPSHOT (TABLE_BLOCK)
+Product     | Q3 Rev   | Margin
+Widget A    | 12.4M    | 18%
+Widget B    | 8.1M     | 22%
+
+## Markdown style section (SECTION_MD)
+Content here about ZEPHYR-TEST-ANCHOR-PH22 and latency metrics for regression checks.
+
+Another paragraph after the markdown heading block.

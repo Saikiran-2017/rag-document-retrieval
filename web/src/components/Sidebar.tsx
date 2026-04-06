@@ -32,6 +32,14 @@ function MenuIcon({ open }: { open: boolean }) {
   );
 }
 
+function healthPillClass(health: string): string {
+  if (health === "ready") return "bg-emerald-50 text-emerald-700 ring-emerald-200/80";
+  if (health === "ready_limited") return "bg-amber-50 text-amber-800 ring-amber-200/80";
+  if (health === "processing") return "bg-stone-100 text-stone-600 ring-stone-200/80";
+  if (health === "failed") return "bg-rose-50 text-rose-700 ring-rose-200/80";
+  return "bg-stone-100 text-stone-600 ring-stone-200/80";
+}
+
 export function MobileNavBar({
   menuOpen,
   onToggleMenu,
@@ -45,7 +53,6 @@ export function MobileNavBar({
         type="button"
         onClick={onToggleMenu}
         className="rounded-lg p-2 text-stone-600 transition hover:bg-stone-100 hover:text-stone-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-400"
-        aria-expanded={menuOpen ? "true" : "false"}
         aria-controls="app-sidebar"
       >
         <span className="sr-only">{menuOpen ? "Close menu" : "Open menu"}</span>
@@ -218,6 +225,14 @@ export function Sidebar({
                   <div className="min-w-0 flex-1 truncate font-medium text-stone-800" title={d.filename}>
                     {d.filename}
                   </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${healthPillClass(
+                      d.health,
+                    )}`}
+                    title={HEALTH_LABEL[d.health] ?? d.health}
+                  >
+                    {HEALTH_LABEL[d.health] ?? d.health}
+                  </span>
                   <button
                     type="button"
                     title="Remove from library"
@@ -227,9 +242,6 @@ export function Sidebar({
                   >
                     <span className="sr-only">Remove {d.filename}</span>×
                   </button>
-                </div>
-                <div className="mt-0.5 text-[11px] text-stone-500">
-                  {HEALTH_LABEL[d.health] ?? d.health}
                 </div>
                 {d.note ? (
                   <div className="mt-1.5 text-[11px] leading-snug text-amber-900/90">{d.note}</div>

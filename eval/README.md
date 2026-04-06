@@ -27,6 +27,12 @@ set PYTHONPATH=.
 
 The runner disables streaming and web search for stable comparisons. If the key is invalid, exit code is `2` and the JSON report records `eval_status: "blocked"`.
 
+**Troubleshooting:** run **`scripts/verify_openai_env.py`** for a masked key check; or run this script with `--verbose-key` (or `KA_EVAL_KEY_DIAG=1`). An **empty** `OPENAI_API_KEY` in the process environment does not block loading from `.env.local` / `.env`.
+
+**Retrieval pipeline (stderr JSON lines):** set `KA_RETRIEVAL_DEBUG=1` (or `KA_DEBUG=1`) while running Streamlit, the API, or this eval. Each chat turn emits structured events: `turn_begin`, `index_loaded`, `retrieval_hybrid_done` (pool sizes, top hit L2/RRF previews, grounding gate reason), and `routing_decision` (whether the LLM gets a grounded prompt).
+
+**Manual hybrid search:** `scripts/debug_retrieval_smoke.py` runs the **same pipeline as chat** (hybrid pool → rerank → trust filter → grounding gate → `select_generation_context`) for CEO / revenue / playbook / latency queries. With a real key it syncs `data/raw` + `data/indexes/faiss_store`. With **`--skip-sync`** it loads an existing FAISS folder only (no API calls); use **`--work-dir eval/_work`** after a successful eval if those artifacts exist. Exit **3** = placeholder key and no index to load.
+
 ## Artifacts
 
 | Path | Role |

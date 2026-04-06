@@ -12,6 +12,6 @@ def get_openai_api_key() -> str:
     if not key:
         raise ValueError(
             "OPENAI_API_KEY is missing. Set it in the environment (e.g. Render), "
-            "or create a gitignored .env.local / .env from .env.example."
+            "or create gitignored `.env.local` from `.env.local.template` (never commit secrets)."
         )
     return key

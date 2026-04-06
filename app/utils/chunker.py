@@ -46,9 +46,15 @@ def _validate_split_params(chunk_size: int, chunk_overlap: int) -> None:
         raise ValueError("chunk_overlap must be smaller than chunk_size (otherwise chunks repeat infinitely).")
 
 
-# Prefer paragraph / line / sentence boundaries before hard cuts (reduces mid-sentence splits).
+# Prefer paragraph / markdown headings / line / sentence boundaries before hard cuts.
 _CHUNK_SEPARATORS = [
     "\n\n",
+    "\n# ",
+    "\n## ",
+    "\n### ",
+    "\n#### ",
+    "\n##### ",
+    "\n###### ",
     "\n",
     ". ",
     ".\n",

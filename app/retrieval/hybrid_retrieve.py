@@ -6,7 +6,9 @@ Improves recall vs vector-only; final ordering is explainable in debug via rrf_s
 
 from __future__ import annotations
 
+import os
 import re
+import time
 from typing import Any
 
 from langchain_community.vectorstores import FAISS
@@ -32,6 +34,84 @@ def _chunk_key(meta: dict[str, Any], fallback: str) -> str:
     if cid not in (None, ""):
         return str(cid)
     return fallback
+
+
+def _bm25_cache_enabled() -> bool:
+    v = os.environ.get("KA_BM25_CACHE", "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
+def _bm25_cache_max_docs() -> int:
+    raw = os.environ.get("KA_BM25_CACHE_MAX_DOCS", "").strip()
+    if not raw:
+        return 20_000
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return 20_000
+
+
+class _Bm25CacheEntry:
+    __slots__ = ("nvec", "doc_count", "keys", "key_to_doc", "bm25", "built_at_ms")
+
+    def __init__(
+        self,
+        *,
+        nvec: int,
+        doc_count: int,
+        keys: list[str],
+        key_to_doc: dict[str, tuple[str, dict[str, Any]]],
+        bm25: BM25Okapi,
+        built_at_ms: int,
+    ) -> None:
+        self.nvec = nvec
+        self.doc_count = doc_count
+        self.keys = keys
+        self.key_to_doc = key_to_doc
+        self.bm25 = bm25
+        self.built_at_ms = built_at_ms
+
+
+# In-process cache (keeps hybrid retrieval from re-tokenizing the entire corpus per query).
+_BM25_CACHE_BY_STORE: dict[int, _Bm25CacheEntry] = {}
+
+
+def _get_or_build_bm25_cache(store: FAISS) -> _Bm25CacheEntry | None:
+    if not _bm25_cache_enabled():
+        return None
+    nvec = faiss_vector_count(store)
+    docs = iter_faiss_documents(store)
+    if not docs:
+        return None
+    if _bm25_cache_max_docs() and len(docs) > _bm25_cache_max_docs():
+        return None
+    key = id(store)
+    cur = _BM25_CACHE_BY_STORE.get(key)
+    if cur and cur.nvec == nvec and cur.doc_count == len(docs):
+        return cur
+
+    keys: list[str] = []
+    corpus_tokens: list[list[str]] = []
+    key_to_doc: dict[str, tuple[str, dict[str, Any]]] = {}
+    for i, doc in enumerate(docs):
+        meta = dict(doc.metadata or {})
+        k = _chunk_key(meta, f"row_{i}")
+        keys.append(k)
+        corpus_tokens.append(_tokenize(doc.page_content))
+        key_to_doc[k] = (doc.page_content, meta)
+
+    entry = _Bm25CacheEntry(
+        nvec=nvec,
+        doc_count=len(docs),
+        keys=keys,
+        key_to_doc=key_to_doc,
+        bm25=BM25Okapi(corpus_tokens),
+        built_at_ms=int(time.time() * 1000),
+    )
+    _BM25_CACHE_BY_STORE[key] = entry
+    return entry
 
 
 def hybrid_retrieve(
@@ -61,15 +141,23 @@ def hybrid_retrieve(
         kv = min(max(k_final, 4), nvec)
         return retrieve_top_k(store, query, k=kv)
 
-    corpus_tokens: list[list[str]] = []
-    keys: list[str] = []
-    for i, doc in enumerate(docs):
-        meta = dict(doc.metadata or {})
-        key = _chunk_key(meta, f"row_{i}")
-        keys.append(key)
-        corpus_tokens.append(_tokenize(doc.page_content))
+    cache = _get_or_build_bm25_cache(store)
+    if cache is not None:
+        keys = cache.keys
+        bm25 = cache.bm25
+        key_to_doc = cache.key_to_doc
+    else:
+        corpus_tokens: list[list[str]] = []
+        keys = []
+        key_to_doc = {}
+        for i, doc in enumerate(docs):
+            meta = dict(doc.metadata or {})
+            key = _chunk_key(meta, f"row_{i}")
+            keys.append(key)
+            corpus_tokens.append(_tokenize(doc.page_content))
+            key_to_doc[key] = (doc.page_content, meta)
+        bm25 = BM25Okapi(corpus_tokens)
 
-    bm25 = BM25Okapi(corpus_tokens)
     q_tok = _tokenize(query)
     bm25_scores = bm25.get_scores(q_tok) if q_tok else [0.0] * len(keys)
     bm25_order = sorted(range(len(keys)), key=lambda i: bm25_scores[i], reverse=True)
@@ -88,12 +176,6 @@ def hybrid_retrieve(
             vec_rank[k] = r + 1
             vec_dist[k] = float(h.distance)
             vec_by_key[k] = h
-
-    key_to_doc: dict[str, tuple[str, dict[str, Any]]] = {}
-    for i, doc in enumerate(docs):
-        meta = dict(doc.metadata or {})
-        key = keys[i]
-        key_to_doc[key] = (doc.page_content, meta)
 
     all_keys = set(vec_rank) | set(bm25_rank)
     rrf: dict[str, float] = {key: 0.0 for key in all_keys}

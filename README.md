@@ -1,43 +1,54 @@
 # Knowledge Assistant
 
-**RAG-powered document Q&A** with honest routing: answers **cite your PDFs, Word docs, and text files** when retrieval is strong - and fall back to **general** replies (without fake citations) when the library is empty, sync fails, or the question is not document-shaped.
+**Production-style RAG document Q&A** with honest routing: answers **cite your PDFs, Word docs, and text files** when retrieval and file health are strong enough—and fall back to **general** replies (without fake citations) when the library is empty, sync fails, or evidence is weak.
 
-**Stack:** Python · OpenAI (embeddings + chat) · LangChain · **FAISS** · **Streamlit** · **FastAPI** · **Next.js** (TypeScript) · SQLite · Docker optional
+**Stack:** Python · OpenAI (embeddings + chat) · LangChain · **FAISS** · **BM25 hybrid** · **Streamlit** · **FastAPI** · **Next.js** (TypeScript) · SQLite · Docker
 
----
-
-## At a glance
-
-| For… | Why this project |
-|------|------------------|
-| **Recruiters / hiring managers** | End-to-end **ingest → chunk → embed → retrieve → generate** with clear failure handling and a **production-style** API + web UI - not only a notebook. |
-| **Engineers** | Shared **`app/`** domain layer; thin UIs (Streamlit, HTTP); explicit **routing**, **trust gates**, and **per-file health** in the index manifest. |
-| **Demos** | Two runnable surfaces: **Streamlit** (fastest live link) or **Next.js + FastAPI** (streaming chat, document tools, SQLite history). |
+**Docs:** [Architecture & design decisions](docs/ARCHITECTURE.md) · [Demo & portfolio copy](docs/DEMO_AND_PORTFOLIO.md) · [Deployment](DEPLOYMENT.md) · [Eval harness](eval/README.md)
 
 ---
 
-## Feature summary
+## Why this project
+
+| Audience | Value |
+|----------|--------|
+| **Recruiters / hiring managers** | End-to-end **ingest → chunk → embed → retrieve → generate** with explicit **routing**, **trust gates**, and **per-file health**—not a one-off notebook. |
+| **Engineers** | One shared **`app/`** domain layer; thin hosts (**Streamlit**, **FastAPI**); **incremental indexing**, **hybrid retrieval**, **SQLite** chat (API path). |
+| **Demos** | **Streamlit** for the fastest live demo, or **Next.js + FastAPI** for streaming chat and a premium chat-first UI. |
+
+---
+
+## How it works (high level)
+
+1. **Upload** → files land under `data/raw/` (typed, size limits on API path).
+2. **Sync** → parse → **structure-aware** normalize → **chunk** → **embed** (with disk cache) → **FAISS** on disk → **document manifest** + optional **retrieval self-probe**.
+3. **Chat** → query rewrite (when needed) → **hybrid retrieve** (vector + BM25, RRF) → rerank → **trust filter** → **grounding gates** → one LLM call (**grounded** with `[SOURCE n]`, or **general** / **web** / **blended**).
+
+Details, gate rationale, and file pointers: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+---
+
+## Key features
 
 | Area | Details |
 |------|---------|
-| **Retrieval** | OpenAI embeddings, **FAISS** vector store on disk, hybrid-style retrieval hooks; **incremental re-index** when file hashes + chunk settings match saved state (reuse unchanged files). |
-| **Answer modes** | **Grounded** (documents), **web**, **blended**, **general**; routing chooses based on library state, retrieval strength, and query shape; **no forced citations**. |
-| **Trust & health** | Per-file manifest states (`uploaded` → `processing` → `ready` / `ready_limited` / `failed`); retrieval hits filtered for unsafe sources; grounded allowance respects library health. |
-| **Task modes** | **Summarize**, **Extract**, **Compare** over retrieved context - **single LLM call** each (no agent loop). |
-| **Streamlit UI** | Upload, sync, preferences, chat history, sources & excerpts expanders, optional debug panel (`KA_DEBUG=1`). |
-| **Full stack** | **FastAPI** REST + **SSE streaming** chat; **Next.js** chat UI with sidebar (chats, upload, sync, file health); **SQLite** chat persistence. |
-| **Ops** | `.env.example`, **Dockerfile** + **docker-compose** (API + web + `./data` volume), **[DEPLOYMENT.md](DEPLOYMENT.md)** for hosted options. |
+| **Retrieval** | FAISS + **BM25** fused with **RRF**; optional **in-process BM25 / FAISS load caches** for repeat queries (invalidated on index rebuild). |
+| **Indexing** | **Content-hash** incremental rebuild: unchanged files can reuse chunks when settings match saved state. |
+| **Answer modes** | **Grounded**, **general**, **web**, **blended**; routing from library state, retrieval strength, and query shape. |
+| **Trust** | Per-file manifest (`ready` / `ready_limited` / `failed` / …); hits filtered; **calibrated gates** for broad vs narrow questions (eval-regression tested). |
+| **Tasks** | **Summarize**, **Extract**, **Compare** over retrieved context (single LLM call per task). |
+| **UIs** | **Streamlit**: upload, sync, expanders for sources & excerpts, optional debug. **Next.js**: sidebar (chats, library, sync), **Stop / New chat / Clear**, streaming, source snippets. |
+| **Ingestion** | PDF (pdfplumber + **pypdf** fallback), DOCX (body + tables in order), TXT; **optional OCR** off by default (`RAG_ENABLE_PDF_OCR`, see `.env.example`). |
+| **Quality** | Gold **document QA eval** (`scripts/run_document_qa_eval.py`): routing, anchors, refusals, forbidden tokens, citation surface checks. |
 
 ---
 
-## Architecture
-
-### Full-stack view
+## Architecture (diagram)
 
 ```text
                     ┌──────────────────┐
                     │   Next.js (web)  │
-                    │  SSE + REST API  │
+                    │  SSE + REST      │
                     └────────┬─────────┘
                              │ HTTP
                     ┌────────▼─────────┐
@@ -47,59 +58,33 @@
                              │ imports
 ┌────────────────┐   ┌───────▼────────────────────────────────────────┐
 │ streamlit_app  │──►│  app/                                             │
-│ (UI only)      │   │  services/  chat, index, upload, doc_task, …    │
-└────────────────┘   │  llm/       generator (general, grounded, tasks)  │
-                     │  retrieval/ FAISS load, retrieve, hybrid helpers │
-                     │  persistence/ chat_store, document_manifest, …     │
-                     │  ingestion/ chunker                              │
+│ (UI only)      │   │  services/   chat, index, upload, doc_task, …   │
+└────────────────┘   │  llm/        generator, validation, intent     │
+                     │  retrieval/  FAISS, hybrid, context selection     │
+                     │  persistence/ manifest, chat_store, library state │
+                     │  ingestion/  loader (PDF, DOCX, TXT)            │
+                     │  utils/      chunker                            │
                      └──────────────────────────────────────────────────┘
                                          │
-                              data/raw/   │   data/indexes/ (FAISS)
-                              uploads     │   + manifest + library state
+                              data/raw/  │  data/indexes/ (FAISS + manifest)
 ```
 
-**Principle:** One **domain layer** (`app/`). **Streamlit** and **FastAPI** are hosts; **Next.js** talks only to HTTP. Retrieval, routing, validation, and trust logic stay in **`app/services`** and **`app/llm`** - not duplicated in the frontends.
-
-### Request path (simplified)
-
-1. **Upload** → safe save under `data/raw/` (typed, size limits, duplicate detection on API path).
-2. **Sync** → fingerprint library → chunk changed files → **embed** (with disk cache) → rebuild or merge FAISS → **document manifest** updated from parse / index / probe.
-3. **Chat** → optional web search branch → retrieve top-k → **usefulness + trust** gates → **one** completion (grounded with `[SOURCE n]` blocks, or general).
+**Principle:** One **domain layer** (`app/`). Frontends do not reimplement retrieval or gates.
 
 ---
 
 ## Screenshots
 
-Add PNGs under **`docs/images/`** and drop them into the table (or embed in this README).
+Add PNGs under **`docs/images/`** and embed them in this README (see **[docs/DEMO_AND_PORTFOLIO.md](docs/DEMO_AND_PORTFOLIO.md)** for a full checklist).
 
-### Streamlit
-
-| # | File | Capture |
-|---|------|---------|
-| 1 | `01-streamlit-hero.png` | Empty state: hero, value prop, starter prompts. |
-| 2 | `02-streamlit-general.png` | Short non-doc question → general answer, **no** sources. |
-| 3 | `03-streamlit-library.png` | Sidebar: upload, file list, Sync, task mode. |
-| 4 | `04-streamlit-grounded.png` | Grounded reply + **Sources** / **Supporting excerpts** expanded. |
-| 5 | `05-streamlit-task.png` | Summarize or Compare with evidence. |
-
-### Next.js + API
-
-| # | File | Capture |
-|---|------|---------|
-| 6 | `06-web-empty.png` | Empty hero + suggested prompts. |
-| 7 | `07-web-streaming.png` | Assistant streaming + mode badge. |
-| 8 | `08-web-sources.png` | **Sources referenced** + optional web sources cards. |
-| 9 | `09-web-mobile.png` | Narrow width: drawer menu + composer (optional). |
-
-**Example embed (after you add files):**
-
-```markdown
-![Next.js chat](docs/images/07-web-streaming.png)
-```
+| Surface | Ideas |
+|---------|--------|
+| **Streamlit** | Hero, sidebar library + sync, grounded answer + sources/excerpts. |
+| **Next.js** | Empty hero, streaming + mode badge, sources with snippets, mobile drawer. |
 
 ---
 
-## Setup guide
+## Local setup
 
 **Prerequisites:** Python **3.11+**, Node **20+** (for `web/`), [OpenAI API key](https://platform.openai.com/).
 
@@ -114,11 +99,16 @@ python -m venv .venv
 
 ```bash
 pip install -r requirements.txt
-# Secrets: set OPENAI_API_KEY in the shell, or copy .env.example to gitignored .env.local
-# PowerShell: Copy-Item .env.example .env.local  then edit .env.local
 ```
 
-**Optional tests:** `pip install -r requirements-dev.txt` then `pytest`.
+**Tests:** `pip install -r requirements-dev.txt` (if present) then `pytest`.
+
+### Secrets (safe for GitHub)
+
+1. **Never commit real keys.** `.env`, `.env.local`, and most `*.env` files are **gitignored**.
+2. Copy **`.env.local.template`** → **`.env.local`** and paste your key there, **or** export `OPENAI_API_KEY` in the shell.
+3. **`.env.example`** and **`.env.local.template`** contain placeholders only and are **not** used as runtime secrets by default.
+4. Verify without printing the key: `set PYTHONPATH=.` then `.venv\Scripts\python.exe scripts/verify_openai_env.py` (optional `--ping-openai`).
 
 ### Run Streamlit
 
@@ -130,119 +120,48 @@ streamlit run streamlit_app.py
 
 ### Run FastAPI + Next.js
 
-**Terminal 1 - API** (repo root, venv active):
-
-```bash
-# CMD
-set PYTHONPATH=.
-python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
+**Terminal 1 — API** (repo root, venv active):
 
 ```powershell
-# PowerShell
 $env:PYTHONPATH="."
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-**Terminal 2 - Web:**
+**Terminal 2 — Web:**
 
 ```bash
 cd web
-cp .env.example .env.local
+cp .env.example .env.local   # or copy on Windows
 npm install
 npm run dev
 ```
 
-→ `http://localhost:3000` · Set `NEXT_PUBLIC_API_URL` to match the API · CORS: `KA_CORS_ORIGINS` (see `.env.example`).
+→ `http://localhost:3000` · Set `NEXT_PUBLIC_API_URL` if the API is not default.
 
-### Docker (all-in-one)
+### Docker
 
 ```bash
-# Set OPENAI_API_KEY in the shell or a gitignored .env / .env.local (see .env.example)
 docker compose up --build
 ```
 
-UI `:3000`, API `:8000`, data persisted in `./data`. See **[DEPLOYMENT.md](DEPLOYMENT.md)** for cloud options.
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for hosted options. UI `:3000`, API `:8000`, `./data` volume.
 
 ### Environment variables
 
-Summarized in **`.env.example`** (root) and **`web/.env.example`**. Highlights: `OPENAI_API_KEY`, `KA_CORS_ORIGINS`, `KA_ENV` (hide OpenAPI in prod), `NEXT_PUBLIC_API_URL`.
-
-**Python / API:** the process environment wins (e.g. Render). Then **`.env`**, then **`.env.local`** overrides values the process did not set (both gitignored). Never commit real keys.
+Summarized in **`.env.example`** (root) and **`web/.env.example`**. Highlights: `OPENAI_API_KEY`, `KA_CORS_ORIGINS`, `KA_ENV`, `NEXT_PUBLIC_API_URL`, optional `RAG_ENABLE_PDF_OCR`, performance toggles `KA_BM25_CACHE`, `KA_BM25_CACHE_MAX_DOCS` (see code comments in `app/retrieval/hybrid_retrieve.py`).
 
 ---
 
-## Usage (quick)
+## Document QA eval (regression)
 
-1. **Upload** supported files → **Sync** to build/update the index.
-2. Ask in **Auto** for normal Q&A; switch to **Summarize / Extract / Compare** for focused tasks.
-3. Open **Sources** (Streamlit expanders or Next cards) when the answer is document-backed.
-4. **New chat** clears thread history; the **library on disk** remains until you change files.
+With a real key and full `requirements.txt`:
 
----
+```bash
+set PYTHONPATH=.
+.venv\Scripts\python.exe scripts/run_document_qa_eval.py --json-report eval/_report_local.json
+```
 
-## Tradeoffs & limitations
-
-| Topic | Reality |
-|-------|---------|
-| **Retrieval** | Embedding similarity is a **proxy** for relevance; distance gates reduce bogus grounding but do not guarantee correctness. |
-| **Corpus size** | Answers use **top-k chunks**, not full multi-hundred-page reads in one shot, by design for latency and cost. |
-| **Scale-out** | Default deployment assumes **one process** with **local FAISS + SQLite**; horizontal scale needs shared storage and a deliberate embedding/index strategy. |
-| **Auth** | No built-in auth; treat as **personal / demo** unless you add a gateway. |
-| **Cost** | Every sync and query uses **OpenAI** tokens; monitor usage on shared demos. |
-| **Verification** | Users should **verify** high-stakes answers against the cited source text. |
-
----
-
-## Future roadmap
-
-- **Eval harness**: fixed Q/A set for retrieval hit rate and answer groundedness (great for interviews).
-- **Managed vector DB**: optional swap from file-backed FAISS for multi-user demos.
-- **Export**: chat or citations to Markdown/PDF.
-- **Auth + tenancy**: API keys or OAuth for public deployments.
-- **Observability**: structured logs / tracing around retrieve + generate.
-
----
-
-## Appendix: portfolio & interview pack
-
-*Copy the sections below into your resume site, LinkedIn, or interview prep doc.*
-
-### Resume bullets (2)
-
-- **Built a production-style RAG workspace** (Python, FAISS, OpenAI, LangChain) with **incremental indexing**, **per-document health**, and **trust-aware routing** so answers cite uploads only when retrieval is reliable, plus **FastAPI** + **Next.js** with **SSE streaming** and SQLite chat history.
-
-- **Designed a shared domain layer** (`app/services`, `app/llm`) consumed by **Streamlit** and **HTTP APIs**, enabling **document + web + blended** answer modes and **summarize/extract/compare** tasks without duplicating retrieval or validation logic.
-
-### Portfolio blurb (short)
-
-> **Knowledge Assistant**. A document-grounded chat app that ingests PDFs and Office files into a **FAISS** index, retrieves with OpenAI embeddings, and answers with **honest routing**: grounded replies with **sources** when evidence is strong, general fallback when it is not. Includes **Streamlit** and a **FastAPI + Next.js** stack with **streaming** and Docker-ready deployment, built to demo **end-to-end ML engineering** and **API design** in interviews.
-
-### Demo script (2–4 minutes)
-
-1. **Hook (20s)**: “Small RAG workspace: chat plus a document library. It cites files when retrieval supports it, and it won’t invent sources when it doesn’t.”
-2. **General path (30s)**: No uploads (or unrelated question): show a **clean general answer** and **no** source UI.
-3. **Grounded path (60–90s)**: Upload a short PDF/TXT → **Sync** → ask something **only in the file** → show **Sources** (and excerpts in Streamlit or cards in Next).
-4. **Trust / resilience (30s)**: Mention **manifest health**, fallback when sync or retrieval is weak, optional **`KA_DEBUG`** to show routing.
-5. **Stretch (30s)**: **Summarize** or **Compare** task mode, or **Next.js streaming** line appearing token-by-token.
-6. **Close (15s)**: “Single domain layer in `app/`, FAISS on disk, thin UIs. Easy to walk through **ingest → embed → retrieve → generate** in a system design round.”
-
-### Interview explanation (60–90 seconds)
-
-> “I built Knowledge Assistant to practice the full RAG loop in a maintainable way. Uploads land in a raw folder; sync chunks and embeds them into a **FAISS** index with **content-hash-based incremental rebuilds** so unchanged files aren’t re-embedded every time.  
-> On a question, the **chat service** decides whether to retrieve, whether the hits are strong enough to **ground** the answer, and whether to blend in **web** results. There’s a **document manifest** for per-file health so we don’t treat broken or partial indexes as fully trustworthy.  
-> The same logic powers **Streamlit** for quick demos and a **FastAPI** backend with **SSE streaming** for a **Next.js** UI, with chat history in **SQLite**. I kept retrieval and prompts in one place so the architecture stays easy to explain and extend.”
-
----
-
-## Routing behavior (Auto mode): detail
-
-- No files / failed sync → **general** answer (no citations).
-- Short, non-document-ish queries → optional **fast path** without retrieval.
-- Weak top hit (distance / usefulness) → **general** (no fake sources).
-- Strong retrieval → **grounded** generation; LLM failure → safe general fallback + note.
-
-Task modes add gates (e.g. **Compare** needs ≥2 files).
+JSON reports under `eval/_report*.json` are **gitignored** by default. See **[eval/README.md](eval/README.md)**.
 
 ---
 
@@ -251,24 +170,44 @@ Task modes add gates (e.g. **Compare** needs ≥2 files).
 ```text
 rag-document-retrieval/
 ├── streamlit_app.py
-├── backend/app/           # FastAPI routes, schemas
+├── backend/app/           # FastAPI app
 ├── web/                   # Next.js (App Router, Tailwind)
 ├── app/                   # Shared RAG domain
-│   ├── services/
-│   ├── llm/
-│   ├── retrieval/
-│   ├── persistence/
-│   └── ingestion/
+├── eval/                  # Gold cases, harness, scoring
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── DEMO_AND_PORTFOLIO.md
+│   └── images/            # screenshots (.gitkeep)
 ├── data/raw/              # uploads (gitignored except samples)
 ├── data/indexes/          # FAISS + manifest (gitignored)
-├── docs/images/           # screenshots for README / portfolio
+├── scripts/               # eval, env verify, retrieval smoke
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
-├── requirements-dev.txt
+├── requirements-optional-ocr.txt
 ├── .env.example
 └── DEPLOYMENT.md
 ```
+
+---
+
+## Tradeoffs & limitations
+
+| Topic | Reality |
+|-------|---------|
+| **Retrieval** | Embeddings approximate relevance; gates reduce bad grounding but do not guarantee correctness. |
+| **Corpus size** | Answers use **top-k** chunks; very large libraries may need tuning, sharding, or a managed vector DB. |
+| **Scale-out** | Default: **single process**, local FAISS + SQLite; multi-instance needs shared storage and an embedding strategy. |
+| **Auth** | No built-in auth—treat as **personal / demo** unless you add a gateway. |
+| **Cost** | OpenAI usage on sync and chat; monitor keys on shared demos. |
+
+---
+
+## Portfolio quick links
+
+- **Architecture & design Q&A:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)  
+- **Demo script & GitHub blurb:** [docs/DEMO_AND_PORTFOLIO.md](docs/DEMO_AND_PORTFOLIO.md)  
+- The previous README’s long-form **resume bullets** and **60-second pitch** are preserved there in consolidated form.
 
 ---
 

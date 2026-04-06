@@ -404,12 +404,15 @@ def render_sources_expander(sources: list[dict[str, Any]]) -> None:
             if i:
                 st.markdown('<div class="ka-src-gap"></div>', unsafe_allow_html=True)
             sn = s.get("source_number", "?")
+            label = str(s.get("source_label") or s.get("source_name", "") or "-")
             st.markdown(
                 f'<p class="ka-src-line"><span class="ka-src-num">[{html.escape(str(sn))}]</span> '
-                f'<span class="ka-src-name">{html.escape(str(s.get("source_name", "") or "-"))}</span> '
-                f'<span class="ka-src-meta">&middot; p. {html.escape(str(s.get("page_label", "n/a")))}</span></p>',
+                f'<span class="ka-src-name">{html.escape(label)}</span></p>',
                 unsafe_allow_html=True,
             )
+            snip = html.escape(str(s.get("snippet") or "")[:360])
+            if snip:
+                st.markdown(f'<div class="ka-quote">{snip}</div>', unsafe_allow_html=True)
             fp = message_service.display_path_hint(s.get("file_path"))
             if fp:
                 st.caption(fp)

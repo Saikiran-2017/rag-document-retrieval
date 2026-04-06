@@ -102,12 +102,40 @@ def cached_openai_embeddings(model: str) -> Any:
 
 
 def load_faiss_store(faiss_folder: Path) -> Any:
-    """Load FAISS from disk each time. Avoids stale in-memory index after rebuilds."""
-    return load_faiss_index(
-        folder_path=faiss_folder,
-        index_name=DEFAULT_INDEX_NAME,
+    """
+    Load FAISS from disk, with a safe in-process cache keyed by on-disk mtimes.
+
+    This avoids repeated pickle+FAISS loads on every chat turn while still
+    invalidating immediately after an index rebuild (file mtime changes).
+    """
+    from app.retrieval.vector_store import DEFAULT_INDEX_NAME as _IDX
+
+    folder = Path(faiss_folder).resolve()
+    fa = folder / f"{_IDX}.faiss"
+    pk = folder / f"{_IDX}.pkl"
+    sig = (
+        int(fa.stat().st_mtime_ns) if fa.is_file() else -1,
+        int(pk.stat().st_mtime_ns) if pk.is_file() else -1,
+    )
+    global _FAISS_STORE_CACHE
+    try:
+        cached = _FAISS_STORE_CACHE.get(str(folder))
+        if cached and cached.get("sig") == sig and cached.get("store") is not None:
+            return cached["store"]
+    except Exception:
+        pass
+
+    store = load_faiss_index(
+        folder_path=folder,
+        index_name=_IDX,
         embeddings=cached_openai_embeddings(DEFAULT_EMBEDDING_MODEL),
     )
+    _FAISS_STORE_CACHE[str(folder)] = {"sig": sig, "store": store}
+    return store
+
+
+# folder -> {sig: (faiss_mtime, pkl_mtime), store: FAISS}
+_FAISS_STORE_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _settings_match_saved_state(
@@ -337,10 +365,11 @@ def ensure_index_matches_library(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )
-    if ok and _streamlit_script_running():
-        st.session_state.kb_sync_fingerprint = fp
+    if ok:
+        if _streamlit_script_running():
+            st.session_state.kb_sync_fingerprint = fp
         if debug_service.debug_enabled():
-            debug_service.merge(index_sync="rebuilt")
+            debug_service.merge(index_sync="rebuilt", ensure_rebuild_ok=True)
         return True, ""
     if debug_service.debug_enabled():
         debug_service.merge(index_sync="rebuild_failed", ensure_error_summary=str(msg)[:200])

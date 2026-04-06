@@ -134,7 +134,10 @@ def _chunk(text: str = "alpha beta gamma", dist: float = 0.5) -> SimpleNamespace
 @patch("app.services.chat_service.generate_grounded_answer")
 @patch("app.services.chat_service.prepare_web_for_generation")
 @patch("app.services.chat_service.select_generation_context")
-@patch("app.services.chat_service.document_health.allow_document_grounding", return_value=True)
+@patch(
+    "app.services.chat_service.document_health.explain_allow_document_grounding",
+    return_value=(True, "test_ok"),
+)
 @patch("app.services.chat_service.document_health.filter_trusted_retrieval_hits", side_effect=lambda f, h: h)
 @patch("app.services.chat_service.rerank_hybrid_hits", side_effect=lambda h: h)
 @patch("app.services.chat_service.hybrid_retrieve", return_value=[MagicMock()])
@@ -202,7 +205,10 @@ def test_grounded_when_docs_good(
 @patch("app.services.chat_service.web_results_strong_enough", return_value=True)
 @patch("app.services.chat_service.prepare_web_for_generation")
 @patch("app.services.chat_service.select_generation_context", return_value=[])
-@patch("app.services.chat_service.document_health.allow_document_grounding", return_value=False)
+@patch(
+    "app.services.chat_service.document_health.explain_allow_document_grounding",
+    return_value=(False, "test_weak"),
+)
 @patch("app.services.chat_service.document_health.filter_trusted_retrieval_hits", side_effect=lambda f, h: h)
 @patch("app.services.chat_service.rerank_hybrid_hits", side_effect=lambda h: h)
 @patch("app.services.chat_service.hybrid_retrieve", return_value=[MagicMock()])
@@ -258,7 +264,10 @@ def test_web_when_docs_weak_web_strong(
 @patch("app.services.chat_service.generate_blended_answer")
 @patch("app.services.chat_service.prepare_web_for_generation")
 @patch("app.services.chat_service.select_generation_context")
-@patch("app.services.chat_service.document_health.allow_document_grounding", return_value=True)
+@patch(
+    "app.services.chat_service.document_health.explain_allow_document_grounding",
+    return_value=(True, "test_ok"),
+)
 @patch("app.services.chat_service.document_health.filter_trusted_retrieval_hits", side_effect=lambda f, h: h)
 @patch("app.services.chat_service.rerank_hybrid_hits", side_effect=lambda h: h)
 @patch("app.services.chat_service.hybrid_retrieve", return_value=[MagicMock()])
@@ -325,7 +334,10 @@ def test_blended_time_sensitive(
 
 @patch("app.services.chat_service.prepare_web_for_generation")
 @patch("app.services.chat_service.select_generation_context", return_value=[])
-@patch("app.services.chat_service.document_health.allow_document_grounding", return_value=False)
+@patch(
+    "app.services.chat_service.document_health.explain_allow_document_grounding",
+    return_value=(False, "test_weak"),
+)
 @patch("app.services.chat_service.document_health.filter_trusted_retrieval_hits", side_effect=lambda f, h: h)
 @patch("app.services.chat_service.rerank_hybrid_hits", side_effect=lambda h: h)
 @patch("app.services.chat_service.hybrid_retrieve", return_value=[MagicMock()])
