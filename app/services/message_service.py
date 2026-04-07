@@ -52,6 +52,7 @@ MSG_PREPARE_DOCS_FAILED = "Couldn't prepare documents. Please try again."
 MSG_PREPARE_SETTINGS_HINT = "Couldn't prepare documents. Adjust Preferences, then try again."
 MSG_READ_FILES_FAILED = "Couldn't read text from those files. Try another file or check they aren't empty."
 MSG_NO_DOCS = "Add documents in the sidebar, sync, then ask again."
+MSG_LIBRARY_NEEDS_SYNC = "Your library has changed. Sync documents, then ask again."
 MSG_EMPTY_MESSAGE = "Please enter a message."
 # Resilience: short, calm copy (no API/technical jargon for end users).
 MSG_UPLOAD_FAILED = "We couldn't save those files. Your question is answered below."

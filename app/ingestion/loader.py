@@ -7,6 +7,7 @@ Each record carries clean text plus metadata for downstream chunking and retriev
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -94,6 +95,91 @@ def _normalize_text(raw: str | None) -> str:
     return "\n\n".join(blocks)
 
 
+def _repair_hyphen_line_breaks(raw: str) -> str:
+    """Join words split across a line break with a hyphen (common in PDF reflow)."""
+    if not raw:
+        return ""
+    t = raw.replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"(\w)-\n(\w)", r"\1\2", t)
+
+
+def _docx_heading_markdown_prefix(style_name: str | None) -> str:
+    """Map Word heading styles to markdown-style markers for the chunker."""
+    if not style_name:
+        return ""
+    s = style_name.strip()
+    low = s.lower()
+    if "heading" in low:
+        m = re.search(r"(\d+)", s)
+        if m:
+            lvl = max(1, min(6, int(m.group(1))))
+            return "\n" + "#" * lvl + " "
+    if low == "title" or low.endswith(" title"):
+        return "\n# "
+    return ""
+
+
+def _pdf_tables_as_text(page: Any) -> str:
+    """Append table-like regions as ``cell | cell`` rows (pdfplumber)."""
+    blocks: list[str] = []
+    try:
+        tables = page.extract_tables() or []
+    except Exception as exc:
+        logger.debug("PDF extract_tables: %s", exc)
+        return ""
+    for table in tables:
+        if not table:
+            continue
+        row_strs: list[str] = []
+        for row in table:
+            if not row:
+                continue
+            cells = [str(c or "").strip() for c in row]
+            if any(cells):
+                row_strs.append(" | ".join(cells))
+        if row_strs:
+            blocks.append("\n".join(row_strs))
+    return "\n\n".join(blocks)
+
+
+def _pdf_page_raw_from_plumber(page: Any) -> str:
+    """
+    Combine default + layout text (whichever is richer) and non-redundant table blocks.
+    """
+    base_a = ""
+    try:
+        base_a = (page.extract_text() or "").strip()
+    except Exception as exc:
+        logger.debug("pdfplumber extract_text: %s", exc)
+    base_b = ""
+    try:
+        base_b = (page.extract_text(layout=True) or "").strip()
+    except Exception as exc:
+        logger.debug("pdfplumber extract_text layout: %s", exc)
+
+    if base_a and base_b:
+        if base_a in base_b:
+            base = base_b
+        elif base_b in base_a:
+            base = base_a
+        else:
+            base = base_a if len(base_a) >= len(base_b) else base_b
+    elif base_a:
+        base = base_a
+    else:
+        base = base_b
+
+    parts: list[str] = []
+    if base:
+        parts.append(base)
+    tbl = _pdf_tables_as_text(page)
+    if tbl and tbl not in base and base not in tbl:
+        parts.append(tbl)
+    elif tbl and not base:
+        parts.append(tbl)
+    return "\n\n".join(parts)
+
+
 def _format_docx_table(table: DocxTable) -> str:
     """Flatten a DOCX table to newline-separated rows, cells as 'a | b'."""
     rows_out: list[str] = []
@@ -148,19 +234,14 @@ def _load_pdf_pages(path: Path) -> list[IngestedDocument]:
 
     with pdfplumber.open(path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            raw = ""
-            try:
-                raw = page.extract_text() or ""
-            except Exception as exc:
-                logger.warning("PDF page %s in %s failed to extract: %s", i, path.name, exc)
-
-            text = _normalize_text(raw)
-            if not text:
-                raw2 = _pypdf_page_text(path, i - 1)
-                text = _normalize_text(raw2)
+            raw_pp = _repair_hyphen_line_breaks(_pdf_page_raw_from_plumber(page))
+            raw_py = _repair_hyphen_line_breaks(_pypdf_page_text(path, i - 1))
+            t_pp = _normalize_text(raw_pp)
+            t_py = _normalize_text(raw_py)
+            text = t_pp if len(t_pp) >= len(t_py) else t_py
             if not text:
                 raw3 = try_ocr_pdf_page(path, i)
-                text = _normalize_text(raw3) if raw3 else ""
+                text = _normalize_text(_repair_hyphen_line_breaks(raw3)) if raw3 else ""
 
             if not text:
                 continue
@@ -193,7 +274,8 @@ def _load_docx_whole(path: Path) -> list[IngestedDocument]:
             para = DocxParagraph(child, document)
             t = _normalize_line(para.text)
             if t:
-                parts.append(t)
+                st = para.style.name if para.style else None
+                parts.append(_docx_heading_markdown_prefix(st) + t)
         elif child.tag == qn("w:tbl"):
             tbl = DocxTable(child, document)
             block = _format_docx_table(tbl)

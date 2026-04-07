@@ -11,6 +11,7 @@ from typing import Any
 import streamlit as st
 
 _retrieval_logger = logging.getLogger("rag.retrieval")
+_last_diagnostics: dict[str, Any] | None = None
 
 # Set True (or env KA_DEBUG=1) to show a compact sidebar debug panel.
 # Does not expose API keys; avoids full stack traces in the UI.
@@ -47,6 +48,33 @@ def log_retrieval_event(event: str, **data: Any) -> None:
     line = json.dumps(payload, default=str, ensure_ascii=False)
     print(line, file=sys.stderr, flush=True)
     _retrieval_logger.info("%s", line)
+
+
+def set_last_diagnostics(diag: dict[str, Any] | None) -> None:
+    """Store a sanitized last-turn diagnostics snapshot (for FastAPI debug endpoints)."""
+    global _last_diagnostics
+    if not debug_enabled():
+        _last_diagnostics = None
+        return
+    if not diag:
+        _last_diagnostics = None
+        return
+    # Ensure JSON-friendly and bounded.
+    safe: dict[str, Any] = {}
+    for k, v in diag.items():
+        try:
+            json.dumps(v, default=str)
+            safe[k] = v
+        except TypeError:
+            safe[k] = str(v)[:500]
+    _last_diagnostics = safe
+
+
+def get_last_diagnostics() -> dict[str, Any] | None:
+    """Return the last stored diagnostics snapshot (debug mode only)."""
+    if not debug_enabled():
+        return None
+    return _last_diagnostics
 
 
 def _dev_debug_bucket() -> dict[str, Any] | None:

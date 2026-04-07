@@ -17,6 +17,13 @@ eval/_stdout*.txt
 eval/_phase20f*.txt
 eval/*_stderr.txt
 eval/*_stdout.txt
+eval/_phase*_*/            # real-doc packs / smoke work dirs
+eval/**/embedding_cache/   # local embedding cache artifacts
+eval/**/*.npy
+eval/**/*.faiss
+eval/**/*.pkl
+eval/**/index_library_state.json
+eval/**/document_manifest.json
 
 # Python
 __pycache__/

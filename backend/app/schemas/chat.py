@@ -31,3 +31,4 @@ class ChatResponse(BaseModel):
     sources: list[SourceRefOut] | None = None
     validation_warning: str | None = None
     retrieval_chunk_count: int | None = None
+    diagnostics: dict[str, Any] | None = None

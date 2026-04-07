@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from app.llm.query_intent import (
     is_broad_document_overview_query,
+    is_section_navigation_query,
+    is_sparse_entity_lookup_query,
     user_expects_document_grounding,
     uses_relaxed_document_grounding_gate,
 )
@@ -45,6 +47,15 @@ def test_relaxed_gate_false_for_negative_eval_queries():
         "According to my uploaded documents, what is the exact recipe for chocolate cake?"
     )
     assert not uses_relaxed_document_grounding_gate(
+        "What year did humans land on Mars according to the internal playbook?"
+    )
+
+
+def test_phase29_lookup_not_relaxed_for_negative_queries():
+    assert not is_sparse_entity_lookup_query(
+        "According to my uploaded documents, what is the exact recipe for chocolate cake?"
+    )
+    assert not is_section_navigation_query(
         "What year did humans land on Mars according to the internal playbook?"
     )
 

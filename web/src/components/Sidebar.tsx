@@ -169,7 +169,8 @@ export function Sidebar({
           Library
         </p>
         <p className="mb-3 px-1 text-[11px] leading-snug text-stone-500">
-          PDF, Word, or text files. Upload, then sync to index.
+          PDF, Word, or text files. Upload, then sync. Amber notes under a file flag weak extraction
+          previews (often scanned PDFs).
         </p>
         <input
           ref={fileRef}
@@ -245,6 +246,18 @@ export function Sidebar({
                 </div>
                 {d.note ? (
                   <div className="mt-1.5 text-[11px] leading-snug text-amber-900/90">{d.note}</div>
+                ) : null}
+                {d.extraction_hint ? (
+                  <div
+                    className={`mt-1.5 text-[10px] leading-snug ${
+                      d.extraction_quality === "low_text"
+                        ? "text-amber-900/85"
+                        : "text-stone-500"
+                    }`}
+                  >
+                    {d.extraction_quality === "low_text" ? "Extraction: " : "Preview: "}
+                    {d.extraction_hint}
+                  </div>
                 ) : null}
               </li>
             ))}

@@ -1,7 +1,7 @@
 import type {
   ChatAnswer,
   ChatSessionRow,
-  DocumentRow,
+  DocumentsListResponse,
   MessageOut,
   TaskMode,
 } from "./types";
@@ -141,10 +141,10 @@ export async function setChatTitle(sessionId: string, title: string): Promise<vo
   if (!r.ok) throw new Error(await readErrorBody(r));
 }
 
-export async function listDocuments(): Promise<{ documents: DocumentRow[]; count: number }> {
+export async function listDocuments(): Promise<DocumentsListResponse> {
   const r = await fetch(apiUrl("/api/v1/documents"), { cache: "no-store" });
   if (!r.ok) throw new Error(await readErrorBody(r));
-  return r.json();
+  return r.json() as Promise<DocumentsListResponse>;
 }
 
 export async function deleteDocument(filename: string): Promise<{ ok: boolean; message: string }> {
@@ -165,6 +165,7 @@ export interface SyncLibraryResult {
   message: string;
   sync_action: string;
   vector_count: number;
+  diagnostics?: Record<string, unknown> | null;
 }
 
 export async function syncLibrary(): Promise<SyncLibraryResult> {
@@ -180,7 +181,15 @@ export async function syncLibrary(): Promise<SyncLibraryResult> {
   return data as SyncLibraryResult;
 }
 
-export async function uploadFiles(files: FileList | File[]): Promise<unknown> {
+export interface UploadFilesResult {
+  ok: boolean;
+  status: string;
+  message: string;
+  saved_count?: number;
+  diagnostics?: Record<string, unknown> | null;
+}
+
+export async function uploadFiles(files: FileList | File[]): Promise<UploadFilesResult> {
   const fd = new FormData();
   const arr = Array.from(files);
   for (const f of arr) {
@@ -194,7 +203,7 @@ export async function uploadFiles(files: FileList | File[]): Promise<unknown> {
   if (!r.ok) {
     throw new Error(formatApiErrorBody(data));
   }
-  return data;
+  return data as UploadFilesResult;
 }
 
 export function buildAssistantExtra(answer: ChatAnswer): Record<string, unknown> {
@@ -203,6 +212,7 @@ export function buildAssistantExtra(answer: ChatAnswer): Record<string, unknown>
   if (answer.web_snippets?.length) ex.web_sources = answer.web_snippets;
   if (answer.assistant_note) ex.status_note = answer.assistant_note;
   if (answer.validation_warning) ex.validation_warning = answer.validation_warning;
+  if (answer.diagnostics && typeof answer.diagnostics === "object") ex.diagnostics = answer.diagnostics;
   if (answer.mode === "web") ex.web_only = true;
   if (answer.mode === "blended") ex.blended = true;
   return ex;

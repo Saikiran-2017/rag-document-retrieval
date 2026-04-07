@@ -4,7 +4,7 @@
 
 **Stack:** Python · OpenAI (embeddings + chat) · LangChain · **FAISS** · **BM25 hybrid** · **Streamlit** · **FastAPI** · **Next.js** (TypeScript) · SQLite · Docker
 
-**Docs:** [Architecture & design decisions](docs/ARCHITECTURE.md) · [Demo & portfolio copy](docs/DEMO_AND_PORTFOLIO.md) · [Deployment](DEPLOYMENT.md) · [Eval harness](eval/README.md)
+**Docs:** [Architecture & design decisions](docs/ARCHITECTURE.md) · [Demo walkthrough](docs/DEMO.md) · [Screenshots checklist](docs/SCREENSHOTS.md) · [Interview notes](docs/INTERVIEW.md) · [Career assets](docs/CAREER.md) · [Deployment](DEPLOYMENT.md) · [Eval harness](eval/README.md)
 
 ---
 
@@ -75,7 +75,7 @@ Details, gate rationale, and file pointers: **[docs/ARCHITECTURE.md](docs/ARCHIT
 
 ## Screenshots
 
-Add PNGs under **`docs/images/`** and embed them in this README (see **[docs/DEMO_AND_PORTFOLIO.md](docs/DEMO_AND_PORTFOLIO.md)** for a full checklist).
+Add PNGs under **`docs/images/`** and embed them in this README (see **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)** for a full checklist).
 
 | Surface | Ideas |
 |---------|--------|
@@ -165,6 +165,20 @@ JSON reports under `eval/_report*.json` are **gitignored** by default. See **[ev
 
 ---
 
+## Observability / debug mode (safe)
+
+This project is designed to be **inspectable** without exposing secrets or confusing normal users.
+
+- **Structured retrieval logs**: set `KA_RETRIEVAL_DEBUG=1` to emit one JSON line per pipeline event (`turn_begin`, `retrieval_hybrid_done`, `routing_decision`, …).
+- **Developer diagnostics on answers** (hidden by default):
+  - Server: set `KA_DEBUG=1` (FastAPI or Streamlit process).
+  - Web UI: set `localStorage.KA_DEBUG=1` and reload to show a “Developer diagnostics” panel under assistant messages.
+  - Debug endpoint: `GET /api/v1/debug/last` returns the last-turn diagnostics snapshot (404 when debug is disabled).
+
+Diagnostics include route selected, pool sizes, trust-filter counts, context chunks selected, grounding gate reason, and selected source names.
+
+---
+
 ## Repository layout
 
 ```text
@@ -206,8 +220,8 @@ rag-document-retrieval/
 ## Portfolio quick links
 
 - **Architecture & design Q&A:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)  
-- **Demo script & GitHub blurb:** [docs/DEMO_AND_PORTFOLIO.md](docs/DEMO_AND_PORTFOLIO.md)  
-- The previous README’s long-form **resume bullets** and **60-second pitch** are preserved there in consolidated form.
+- **Demo script:** [docs/DEMO.md](docs/DEMO.md)  
+- **Career assets (GitHub blurb, resume bullets, portfolio summary):** [docs/CAREER.md](docs/CAREER.md)
 
 ---
 

@@ -55,6 +55,7 @@ export function ChatApp() {
   const [banner, setBanner] = useState<string | null>(null);
   const [uploadHint, setUploadHint] = useState<string | null>(null);
   const [syncHint, setSyncHint] = useState<string | null>(null);
+  const [libraryNeedsSync, setLibraryNeedsSync] = useState(false);
   const [ready, setReady] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
   const [showThreadSkeleton, setShowThreadSkeleton] = useState(false);
@@ -66,6 +67,7 @@ export function ChatApp() {
     try {
       const d = await listDocuments();
       setDocuments(d.documents);
+      setLibraryNeedsSync(Boolean(d.library_needs_sync));
     } catch {
       /* sidebar optional */
     }
@@ -237,16 +239,30 @@ export function ChatApp() {
     if (!files?.length) return;
     setUploadHint(null);
     setBanner(null);
+    setBusy(true);
     try {
-      const data = (await uploadFiles(files)) as {
-        message?: string;
-        status?: string;
-        saved_count?: number;
-      };
-      setUploadHint(data.message ?? "Upload finished.");
+      const t0 = performance.now();
+      const data = await uploadFiles(files);
+      const dt = performance.now() - t0;
+      const extra =
+        data?.diagnostics && typeof data.diagnostics === "object" && "timing_ms_total" in data.diagnostics
+          ? ` (server ${String((data.diagnostics as any).timing_ms_total)} ms)`
+          : ` (client ${Math.round(dt)} ms)`;
+      setUploadHint((data.message ?? "Upload finished. Syncing your library…") + extra);
+      await refreshDocuments();
+      const t1 = performance.now();
+      const res = await syncLibrary();
+      const dt2 = performance.now() - t1;
+      const extra2 =
+        res?.diagnostics && typeof res.diagnostics === "object" && "timing_ms_total" in res.diagnostics
+          ? ` (server ${String((res.diagnostics as any).timing_ms_total)} ms)`
+          : ` (client ${Math.round(dt2)} ms)`;
+      setSyncHint(res.message + extra2);
       await refreshDocuments();
     } catch (e) {
       setBanner(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -255,8 +271,14 @@ export function ChatApp() {
     setBanner(null);
     setBusy(true);
     try {
+      const t0 = performance.now();
       const res = await syncLibrary();
-      setSyncHint(res.message);
+      const dt = performance.now() - t0;
+      const extra =
+        res?.diagnostics && typeof res.diagnostics === "object" && "timing_ms_total" in res.diagnostics
+          ? ` (server ${String((res.diagnostics as any).timing_ms_total)} ms)`
+          : ` (client ${Math.round(dt)} ms)`;
+      setSyncHint(res.message + extra);
       await refreshDocuments();
     } catch (e) {
       setBanner(e instanceof Error ? e.message : "Sync failed");
@@ -447,6 +469,15 @@ export function ChatApp() {
           syncHint={syncHint}
         />
         <main className="flex min-w-0 flex-1 flex-col pt-12 lg:pt-0">
+          {libraryNeedsSync && documents.length > 0 ? (
+            <div
+              className="border-b border-sky-200/90 bg-sky-50/95 px-4 py-2.5 text-center text-sm leading-snug text-sky-950 backdrop-blur-sm"
+              role="status"
+            >
+              Your library is not indexed for search yet, or it changed since the last sync. Use{" "}
+              <strong>Sync documents</strong> in the sidebar before relying on answers from your files.
+            </div>
+          ) : null}
           {banner ? (
             <div className="border-b border-amber-200/90 bg-amber-50/95 px-4 py-2.5 text-center text-sm leading-snug text-amber-950 backdrop-blur-sm">
               <span>{banner}</span>
@@ -465,6 +496,11 @@ export function ChatApp() {
             isStreaming={streaming}
             taskMode={taskMode}
             onTaskModeChange={setTaskMode}
+            readinessHint={
+              libraryNeedsSync && documents.length > 0
+                ? "Until you sync, the assistant may answer generally and note that your file index is stale."
+                : null
+            }
           />
         </main>
       </div>

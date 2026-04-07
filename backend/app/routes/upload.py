@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.services.upload_service import UploadSaveItem, max_upload_bytes, save_upload_batch
+from app.services import debug_service
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.schemas.common import UploadFileOutcome, UploadResponse
@@ -93,6 +95,7 @@ async def upload_files(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided.")
 
+    t0 = time.perf_counter()
     views: list[UploadFileView] = []
     for uf in files:
         name = (uf.filename or "upload").strip()
@@ -107,6 +110,8 @@ async def upload_files(
         max_bytes=max_upload_bytes(),
     )
     resp = _build_upload_response(items)
+    if debug_service.debug_enabled():
+        resp.diagnostics = {"timing_ms_total": round((time.perf_counter() - t0) * 1000.0, 2)}
     if resp.status == "failed":
         return JSONResponse(status_code=400, content=resp.model_dump(mode="json"))
     return resp

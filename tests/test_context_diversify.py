@@ -44,3 +44,20 @@ def test_select_generation_context_diversifies_when_broad_and_multi_file():
     assert len(ctx) >= 2
     srcs = [str(h.metadata.get("source_name")) for h in ctx]
     assert "corp_finance.txt" in srcs
+
+
+def test_select_generation_context_skips_diversify_for_section_navigation():
+    ranked = [
+        _hit("playbook_long.txt", 0, "anchor section seven disaster"),
+        _hit("corp_finance.txt", 1, "Acme revenue"),
+        _hit("playbook_long.txt", 2, "appendix filler"),
+    ]
+    ctx = select_generation_context(
+        ranked,
+        mode="qa",
+        top_k=4,
+        nvec=10,
+        broad_document_question=True,
+        section_navigation_query=True,
+    )
+    assert ctx[0].page_content == "anchor section seven disaster"

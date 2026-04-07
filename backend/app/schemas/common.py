@@ -23,6 +23,7 @@ class UploadResponse(BaseModel):
     saved_count: int = 0
     duplicate_count: int = 0
     rejected_count: int = 0
+    diagnostics: dict | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -44,6 +45,7 @@ class SyncResponse(BaseModel):
     """``unchanged`` | ``rebuilt`` | ``failed``; mirrors :func:`app.services.index_service.rebuild_knowledge_index` action."""
     sync_action: str = "failed"
     content_fingerprint: list[list[str]] | None = None
+    diagnostics: dict | None = None
 
 
 class DocumentRow(BaseModel):
@@ -51,11 +53,14 @@ class DocumentRow(BaseModel):
     health: str
     note: str | None = None
     updated_at: str | None = None
+    extraction_quality: str = "unknown"
+    extraction_hint: str | None = None
 
 
 class DocumentsListResponse(BaseModel):
     documents: list[DocumentRow] = Field(default_factory=list)
     count: int = 0
+    library_needs_sync: bool = False
 
 
 class MessageOut(BaseModel):

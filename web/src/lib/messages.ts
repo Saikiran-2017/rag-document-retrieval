@@ -23,6 +23,10 @@ export function messageOutToUi(m: MessageOut): UiMessage {
           : undefined,
     validation_warning:
       typeof x.validation_warning === "string" ? x.validation_warning : undefined,
+    diagnostics:
+      x.diagnostics && typeof x.diagnostics === "object" && !Array.isArray(x.diagnostics)
+        ? (x.diagnostics as Record<string, unknown>)
+        : undefined,
   };
   return {
     id: randomId(),

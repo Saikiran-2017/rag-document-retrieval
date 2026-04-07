@@ -13,6 +13,7 @@ export function Composer({
   isStreaming,
   taskMode,
   onTaskModeChange,
+  readinessHint,
 }: {
   onSend: (text: string) => void;
   onStop?: () => void;
@@ -22,6 +23,7 @@ export function Composer({
   isStreaming?: boolean;
   taskMode: TaskMode;
   onTaskModeChange: (m: TaskMode) => void;
+  readinessHint?: string | null;
 }) {
   const [text, setText] = useState("");
 
@@ -66,6 +68,9 @@ export function Composer({
             ) : null}
           </div>
         </div>
+        {readinessHint ? (
+          <p className="text-xs leading-snug text-sky-900/90">{readinessHint}</p>
+        ) : null}
         {disabled && isStreaming ? (
           <p className="text-xs text-stone-500">Waiting for the reply…</p>
         ) : null}

@@ -5,7 +5,8 @@ export const EMPTY_STATE_VALUE_PROP =
   "Chat normally. When your library applies, answers cite your files.";
 export const HERO_BEST_FOR =
   "Best for a focused set of files. Works without uploads. Complements your other AI tools.";
-export const SIDEBAR_CAPTION = "Upload, sync, ask.";
+export const SIDEBAR_CAPTION =
+  "Upload, sync, ask. Messy or scanned PDFs may extract poorly unless you enable optional OCR.";
 
 export const STARTER_QUESTIONS = [
   "Summarize the key points I should remember.",

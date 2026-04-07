@@ -1,3 +1,5 @@
 # Development and tests (install after requirements.txt)
 -r requirements.txt
 pytest>=8.0.0
+# Optional: scripts/phase28_real_docs_pack.py PDF generation
+reportlab>=4.0.0

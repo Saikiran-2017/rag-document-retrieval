@@ -95,3 +95,77 @@ def uses_relaxed_document_grounding_gate(query: str) -> bool:
         )
     )
     return perf and vague
+
+
+# Narrow entity / role questions: relax hybrid L2 slightly when RRF is strong (Phase 29).
+_ENTITY_LOOKUP_SAFE = re.compile(
+    r"\b("
+    r"named\s+as\b|"
+    r"who\s+is\s+named\b|"
+    r"name\s+of\b|"
+    r"who\s+is\b|who\s+was\b|"
+    r"owner\b|maintainer\b|on-?call\b|"
+    r"manager\b|director\b|lead\b|"
+    r"author\b|reviewer\b|approver\b|"
+    r"contact\b|point\s+of\s+contact\b|"
+    r"cfo\b|ceo\b|cto\b|coo\b|ciso\b|"
+    r"finance\b|financial\b|accounting\b|"
+    r"effective\s+date\b|expires?\b|deadline\b|due\s+date\b|"
+    r"invoice\b|po\b|purchase\s+order\b|order\s+id\b|"
+    r"ticket\b|case\b|issue\b|incident\b|"
+    r"identifier\b|id\b|uuid\b|"
+    r"serial\b|tracking\b|reference\b|ref\b"
+    r")\b",
+    re.I,
+)
+
+_LOOKUP_NEGATIVE = re.compile(
+    r"\b(recipe|chocolate cake|land on mars|on mars|exact recipe|impossible fact)\b",
+    re.I,
+)
+
+
+def is_sparse_entity_lookup_query(query: str) -> bool:
+    """
+    True for short entity/role lookups where vector distance is often just above strict QA
+    but hybrid RRF still shows a good keyword match (e.g. CFO name).
+    """
+    q = (query or "").strip()
+    if len(q) < 10:
+        return False
+    if _LOOKUP_NEGATIVE.search(q):
+        return False
+    ql = q.lower()
+    # Fast shape heuristic: short WH- questions or "name/id/date" asks.
+    wh = bool(re.match(r"^\s*(who|what|when)\b", ql))
+    ask = bool(re.search(r"\b(name|named|id|identifier|uuid|date|owner|lead|manager|contact)\b", ql))
+    if not (wh or ask):
+        return False
+    return bool(_ENTITY_LOOKUP_SAFE.search(q))
+
+
+def is_section_navigation_query(query: str) -> bool:
+    """
+    True when the user targets a structural part of a document (section N, DR topic, appendix).
+
+    Used to widen retrieval, boost heading-like matches, and pass more diverse chunks to the LLM.
+    """
+    q = (query or "").strip().lower()
+    if len(q) < 12:
+        return False
+    if re.search(r"\bsection\s*(?:#|number|num\.?)?\s*\d+\b", q):
+        return True
+    if "section" in q and re.search(r"\b(seven|eight|nine|ten|eleven|twelve|\d+)\b", q):
+        return True
+    # Common phrasing without the literal word "section"
+    if re.search(r"\b(part|chapter|appendix|annex)\s+\d+\b", q):
+        return True
+    if re.search(r"\b(in|under)\s+(appendix|chapter)\b", q):
+        return True
+    if "disaster" in q and "recover" in q:
+        return True
+    if re.search(r"\bwhat\s+.*\b(section|subsection|appendix)\b", q):
+        return True
+    if re.search(r"\bchapter\s+\d+\b", q):
+        return True
+    return False

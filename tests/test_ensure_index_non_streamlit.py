@@ -17,6 +17,7 @@ def test_ensure_returns_true_when_rebuild_ok_without_streamlit(monkeypatch: pyte
     (raw / "doc.txt").write_text("sample corpus text for fingerprint", encoding="utf-8")
 
     monkeypatch.setattr(index_service, "_streamlit_script_running", lambda: False)
+    monkeypatch.setenv("KA_AUTO_SYNC_ON_CHAT", "1")
     monkeypatch.setattr(
         index_service,
         "rebuild_knowledge_index",

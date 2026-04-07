@@ -42,9 +42,17 @@ _HYBRID_TASK_MAX_L2 = 1.1
 _HYBRID_TASK_MIN_RRF = 0.012
 _HYBRID_TASK_VERY_GOOD_L2 = 0.9
 # Broad overview / vague doc-shaped QA: top hit L2 is often higher; RRF still shows keyword fit.
-_HYBRID_BROAD_QA_MAX_L2 = 1.22
+_HYBRID_BROAD_QA_MAX_L2 = 1.4
 _HYBRID_BROAD_QA_MIN_RRF = 0.006
 _HYBRID_BROAD_QA_VERY_GOOD_L2 = 0.96
+_HYBRID_BROAD_QA_HIGH_RRF = 0.02
+_HYBRID_BROAD_QA_MAX_L2_WHEN_HIGH_RRF = 1.55
+# Sparse entity / role lookups (CFO name, etc.): top L2 often slightly above strict QA but RRF is strong.
+_HYBRID_LOOKUP_MAX_L2 = 1.32
+_HYBRID_LOOKUP_MIN_RRF = 0.008
+_HYBRID_LOOKUP_VERY_GOOD_L2 = 0.88
+_HYBRID_LOOKUP_HIGH_RRF = 0.026
+_HYBRID_LOOKUP_MAX_L2_WHEN_HIGH_RRF = 1.45
 
 UNKNOWN_PHRASE = "I don't know based on the provided documents."
 
@@ -89,6 +97,7 @@ Rules:
 - If the question asks for content not present in the Text lines, say so and use the unknown phrase above.
 - For overview, summary, main themes, or "what is this document about" questions, synthesize across all SOURCE blocks you were given; cite multiple [SOURCE n] when different sections support different parts of the answer.
 - When CONTEXT includes multiple [SOURCE N] blocks and more than one is relevant, use more than one citation; do not answer from only the first block if other blocks clearly apply.
+- If the question targets a named section, heading topic, or a specific role/title (e.g. CFO), a single explicit sentence in the Text that states the fact is sufficient: answer briefly and cite that source. Do not abstain only because the passage is short, when it clearly names the section/topic or the person/role asked about.
 - Keep the answer concise and directly responsive to the question."""
 
 
@@ -178,14 +187,76 @@ def chunks_to_source_refs(chunks: list[RetrievedChunk]) -> tuple[SourceRef, ...]
 _MAX_CONTEXT_CHARS_PER_CHUNK = 2000
 
 
-def _truncate_chunk_text(text: str, max_chars: int = _MAX_CONTEXT_CHARS_PER_CHUNK) -> str:
+_CTX_STOP = frozenset(
+    "a an the and or but if to of in on for with as at by from is are was were be been being "
+    "it this that these those i you we they he she not no yes so than then there here do does did "
+    "can could should would will just only very more most also into about out up what which who "
+    "how when where why all any each both few such than too very my your our their".split()
+)
+
+
+def _query_keywords(query: str, *, limit: int = 8) -> list[str]:
+    """Cheap keyword extraction for context slicing (no extra model calls)."""
+    q = (query or "").lower()
+    toks = [t for t in re.findall(r"[a-z0-9]{3,}", q) if t not in _CTX_STOP]
+    # Stable de-dup
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in toks:
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _slice_text_around_match(text: str, query: str, *, max_chars: int) -> str:
+    """
+    Keep evidence near the query match even when the chunk is long.
+
+    Strategy:
+    - If we can find a keyword match, return a window around the first match.
+    - Otherwise, include head + tail so late facts aren't silently dropped.
+    """
     t = (text or "").strip()
     if len(t) <= max_chars:
         return t
+    kw = _query_keywords(query)
+    low = t.lower()
+    hit_at: int | None = None
+    for k in kw:
+        i = low.find(k)
+        if i >= 0:
+            hit_at = i
+            break
+    if hit_at is not None:
+        half = max_chars // 2
+        start = max(0, hit_at - half)
+        end = min(len(t), start + max_chars)
+        start = max(0, end - max_chars)
+        prefix = "..." if start > 0 else ""
+        suffix = "..." if end < len(t) else ""
+        return prefix + t[start:end].strip() + suffix
+    # Fallback: head + tail.
+    head = max(200, int(max_chars * 0.6))
+    tail = max(120, max_chars - head - 20)
+    head_txt = t[:head].rstrip()
+    tail_txt = t[-tail:].lstrip()
+    return f"{head_txt}\n...\n{tail_txt}"
+
+
+def _truncate_chunk_text(text: str, *, query: str | None = None, max_chars: int = _MAX_CONTEXT_CHARS_PER_CHUNK) -> str:
+    t = (text or "").strip()
+    if len(t) <= max_chars:
+        return t
+    if query and query.strip():
+        return _slice_text_around_match(t, query, max_chars=max_chars)
     return t[: max_chars - 1].rstrip() + "..."
 
 
-def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
+def format_context_for_prompt(chunks: list[RetrievedChunk], *, query: str | None = None) -> str:
     """
     Turn retrieved chunks into numbered context blocks the model must stay within.
 
@@ -197,7 +268,7 @@ def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
     blocks: list[str] = []
     for i, h in enumerate(chunks, start=1):
         m = h.metadata
-        body = _truncate_chunk_text(h.page_content)
+        body = _truncate_chunk_text(h.page_content, query=query)
         blocks.append(
             f"[SOURCE {i}] {_meta_str(m, 'source_name')} · p.{_normalize_page_label(m)}\n"
             f"Text:\n{body}"
@@ -206,7 +277,11 @@ def format_context_for_prompt(chunks: list[RetrievedChunk]) -> str:
 
 
 def build_grounded_messages(
-    query: str, context_block: str, *, n_context_sources: int = 1
+    query: str,
+    context_block: str,
+    *,
+    n_context_sources: int = 1,
+    section_navigation_query: bool = False,
 ) -> list[SystemMessage | HumanMessage]:
     """System + user messages for a single grounded completion."""
     synth = ""
@@ -215,15 +290,40 @@ def build_grounded_messages(
             "\nYou were given multiple SOURCE blocks. If the question is broad or spans topics, "
             "draw from every relevant block and cite each one you use (not only [SOURCE 1])."
         )
+    section_note = ""
+    if section_navigation_query:
+        section_note = (
+            "\nThe question targets a specific section, heading, or labeled topic. "
+            "If any Text line explicitly names that section number, heading, anchor, or topic "
+            "(even a single sentence), answer from that line and cite the SOURCE. "
+            f"Use {UNKNOWN_PHRASE!r} only when no Text line mentions the section/topic asked about."
+        )
+    if section_navigation_query:
+        answer_rules = (
+            "Answer using only the Text under each [SOURCE N]. Cite [SOURCE N] when you state a fact. "
+            f"If (and only if) no Text line is about the section/topic asked, reply exactly: {UNKNOWN_PHRASE}"
+        )
+    else:
+        answer_rules = (
+            "Answer using only the Text under each [SOURCE N]. "
+            "Cite [SOURCE N] when you use a passage. "
+            f"If you cannot answer from the Text, reply exactly: {UNKNOWN_PHRASE}"
+        )
+    system = GROUNDING_SYSTEM_PROMPT
+    if section_navigation_query:
+        system = (
+            f"{GROUNDING_SYSTEM_PROMPT}\n\n"
+            "For section/heading/topic questions: a single explicit sentence that names the section "
+            "or topic (e.g. that section seven discusses disaster recovery) is a complete answer; "
+            "quote or paraphrase it and cite. Do not reply with the unknown phrase when such a sentence exists."
+        )
     user_body = (
         f"CONTEXT:\n{context_block}\n\n"
-        f"QUESTION:\n{query.strip()}\n\n"
-        "Answer using only the Text under each [SOURCE N]. "
-        "Cite [SOURCE N] when you use a passage. "
-        f"If you cannot answer from the Text, reply exactly: {UNKNOWN_PHRASE}"
-        f"{synth}"
+        f"QUESTION:\n{query.strip()}\n"
+        f"{section_note}\n\n"
+        f"{answer_rules}{synth}"
     )
-    return [SystemMessage(content=GROUNDING_SYSTEM_PROMPT), HumanMessage(content=user_body)]
+    return [SystemMessage(content=system), HumanMessage(content=user_body)]
 
 
 def _yield_llm_stream(model: ChatOpenAI, messages: list[SystemMessage | HumanMessage]) -> Iterator[str]:
@@ -356,7 +456,7 @@ def generate_document_task_answer(
             sources=(),
         )
 
-    context_block = format_context_for_prompt(retrieved_chunks)
+    context_block = format_context_for_prompt(retrieved_chunks, query=query)
     messages = build_document_task_messages(task, query, context_block)
     model = llm or create_chat_llm(
         model=chat_model,
@@ -443,6 +543,7 @@ def hybrid_retrieval_is_useful(
     *,
     for_document_task: bool = False,
     for_broad_qa: bool = False,
+    for_lookup_qa: bool = False,
 ) -> bool:
     """
     Gate after hybrid RRF + rerank: require vector similarity and fusion mass,
@@ -461,6 +562,10 @@ def hybrid_retrieval_is_useful(
         max_l2 = _HYBRID_BROAD_QA_MAX_L2
         min_rrf = _HYBRID_BROAD_QA_MIN_RRF
         very_good = _HYBRID_BROAD_QA_VERY_GOOD_L2
+    elif for_lookup_qa:
+        max_l2 = _HYBRID_LOOKUP_MAX_L2
+        min_rrf = _HYBRID_LOOKUP_MIN_RRF
+        very_good = _HYBRID_LOOKUP_VERY_GOOD_L2
     else:
         max_l2 = _HYBRID_MAX_L2
         min_rrf = _HYBRID_MIN_RRF
@@ -468,6 +573,12 @@ def hybrid_retrieval_is_useful(
     if rrf > 0:
         strong_vec = d <= very_good
         fusion_ok = d <= max_l2 and rrf >= min_rrf
+        # Broad/summary questions can have weak vector similarity but very strong hybrid support.
+        # If RRF is clearly high, allow a looser distance cap to avoid false refusals on real docs.
+        if for_broad_qa and (not fusion_ok) and rrf >= _HYBRID_BROAD_QA_HIGH_RRF:
+            fusion_ok = d <= _HYBRID_BROAD_QA_MAX_L2_WHEN_HIGH_RRF
+        if for_lookup_qa and (not fusion_ok) and rrf >= _HYBRID_LOOKUP_HIGH_RRF:
+            fusion_ok = d <= _HYBRID_LOOKUP_MAX_L2_WHEN_HIGH_RRF
         return fusion_ok or strong_vec
     return d <= USEFUL_RETRIEVAL_MAX_L2
 
@@ -487,6 +598,8 @@ _LIMITED_SAME_SOURCE_COHERE_MAX_L2 = 1.15
 _LIMITED_SAME_SOURCE_COHERE_MIN_RRF = 0.005
 _LIMITED_QA_COHERE_MIN_HITS = 2
 _LIMITED_QA_COHERE_MAX_L2 = 1.02
+_LIMITED_LOOKUP_QA_MAX_L2 = 1.1
+_LIMITED_LOOKUP_QA_MIN_RRF = 0.006
 
 
 def hybrid_limited_same_source_fallback(
@@ -509,6 +622,7 @@ def hybrid_hit_strong_for_limited_corpora(
     *,
     for_document_task: bool = False,
     for_broad_qa: bool = False,
+    for_lookup_qa: bool = False,
     same_source_hits_in_window: int | None = None,
 ) -> bool:
     """True when the top hit is strong enough to ground answers for weak-trust documents."""
@@ -519,6 +633,10 @@ def hybrid_hit_strong_for_limited_corpora(
     if for_broad_qa:
         if rrf > 0:
             return d <= _LIMITED_BROAD_QA_MAX_L2 and rrf >= _LIMITED_BROAD_QA_MIN_RRF
+        return d <= USEFUL_RETRIEVAL_MAX_L2
+    if for_lookup_qa:
+        if rrf > 0:
+            return d <= _LIMITED_LOOKUP_QA_MAX_L2 and rrf >= _LIMITED_LOOKUP_QA_MIN_RRF
         return d <= USEFUL_RETRIEVAL_MAX_L2
     if rrf > 0:
         # Narrow QA sometimes yields only ~2 top hits from one source after chunk/format changes.
@@ -601,7 +719,7 @@ def generate_blended_answer(
 ) -> GroundedAnswer:
     if not query.strip():
         raise ValueError("Query must be non-empty.")
-    doc_block = format_context_for_prompt(doc_chunks)
+    doc_block = format_context_for_prompt(doc_chunks, query=query)
     model = create_chat_llm(model=chat_model, temperature=0.0, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
     messages = build_blended_messages(query, doc_block, web_context_block)
     response = model.invoke(messages)
@@ -621,14 +739,18 @@ def stream_grounded_answer_tokens(
     retrieved_chunks: list[RetrievedChunk],
     *,
     chat_model: str = DEFAULT_CHAT_MODEL,
+    section_navigation_query: bool = False,
 ) -> Iterator[str]:
     """Yield text tokens for Streamlit ``st.write_stream`` (document-grounded only)."""
     if not retrieved_chunks:
         yield "No passages retrieved."
         return
-    context_block = format_context_for_prompt(retrieved_chunks)
+    context_block = format_context_for_prompt(retrieved_chunks, query=query)
     messages = build_grounded_messages(
-        query, context_block, n_context_sources=len(retrieved_chunks)
+        query,
+        context_block,
+        n_context_sources=len(retrieved_chunks),
+        section_navigation_query=section_navigation_query,
     )
     model = create_chat_llm(
         model=chat_model,
@@ -707,7 +829,7 @@ def stream_blended_answer_tokens(
     if not query.strip():
         yield ""
         return
-    doc_block = format_context_for_prompt(doc_chunks)
+    doc_block = format_context_for_prompt(doc_chunks, query=query)
     model = create_chat_llm(model=chat_model, temperature=0.0, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
     messages = build_blended_messages(query, doc_block, web_context_block)
     yield from _yield_llm_stream(model, messages)
@@ -720,6 +842,7 @@ def generate_grounded_answer(
     llm: ChatOpenAI | None = None,
     chat_model: str = DEFAULT_CHAT_MODEL,
     temperature: float = 0.0,
+    section_navigation_query: bool = False,
 ) -> GroundedAnswer:
     """
     Produce an answer that uses only ``retrieved_chunks`` as evidence.
@@ -740,9 +863,12 @@ def generate_grounded_answer(
             sources=(),
         )
 
-    context_block = format_context_for_prompt(retrieved_chunks)
+    context_block = format_context_for_prompt(retrieved_chunks, query=query)
     messages = build_grounded_messages(
-        query, context_block, n_context_sources=len(retrieved_chunks)
+        query,
+        context_block,
+        n_context_sources=len(retrieved_chunks),
+        section_navigation_query=section_navigation_query,
     )
     model = llm or create_chat_llm(
         model=chat_model,

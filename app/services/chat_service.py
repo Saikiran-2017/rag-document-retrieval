@@ -28,12 +28,15 @@ from app.llm.generator import (
 )
 from app.llm.query_intent import (
     is_broad_document_overview_query,
+    is_section_navigation_query,
+    is_sparse_entity_lookup_query,
     user_expects_document_grounding,
     uses_relaxed_document_grounding_gate,
 )
 from app.llm.query_rewrite import rewrite_for_retrieval
 from app.retrieval.context_selection import (
     hybrid_pool_size,
+    prioritize_section_navigation_hits,
     rerank_hybrid_hits,
     select_generation_context,
 )
@@ -74,6 +77,8 @@ class AssistantTurn:
     web_snippets: list[dict[str, str]] | None = None
     # When set, UI should ``st.write_stream(stream_tokens())`` then :func:`materialize_streamed_turn`.
     stream_tokens: Callable[[], Iterator[str]] | None = None
+    # Optional developer diagnostics (only populated in debug mode).
+    diagnostics: dict[str, Any] | None = None
 
 
 def _streaming_enabled() -> bool:
@@ -101,6 +106,7 @@ def materialize_streamed_turn(turn: AssistantTurn, full_text: str) -> AssistantT
             assistant_note=merge_notes(turn.assistant_note, warn),
             web_snippets=turn.web_snippets,
             stream_tokens=None,
+            diagnostics=turn.diagnostics,
         )
     if turn.mode == "blended" and turn.hits:
         raw = ft or UNKNOWN_PHRASE
@@ -120,6 +126,7 @@ def materialize_streamed_turn(turn: AssistantTurn, full_text: str) -> AssistantT
             web_snippets=turn.web_snippets,
             assistant_note=merge_notes(turn.assistant_note, ga.validation_warning),
             stream_tokens=None,
+            diagnostics=turn.diagnostics,
         )
     if turn.mode == "web":
         wurls = [str(d.get("url") or "") for d in (turn.web_snippets or [])]
@@ -160,6 +167,10 @@ _TIME_SENSITIVE_HINT = re.compile(
 
 
 def _wants_blended_web(query: str) -> bool:
+    # "Who is the CFO" matches time-sensitive heuristics but should stay document-grounded when
+    # library hits exist (avoid unrelated web CFO news in blended answers).
+    if is_sparse_entity_lookup_query(query):
+        return False
     return bool(_TIME_SENSITIVE_HINT.search(query))
 
 
@@ -219,6 +230,37 @@ def _hit_debug_rows(hits: list[RetrievedChunk], limit: int = 8) -> list[dict[str
 def _finalize_answer(turn: AssistantTurn, **dbg: Any) -> AssistantTurn:
     if debug_service.debug_enabled():
         debug_service.merge(**dbg)
+        # Developer-only diagnostics payload for API/UI.
+        srcs = []
+        if turn.hits:
+            seen: set[str] = set()
+            for h in turn.hits:
+                sn = str(h.metadata.get("source_name") or "").strip()
+                if sn and sn not in seen:
+                    seen.add(sn)
+                    srcs.append(sn)
+        diag: dict[str, Any] = {
+            "mode": turn.mode,
+            "routing": dbg.get("routing"),
+            "route_selected": dbg.get("route_selected") or dbg.get("routing"),
+            "pool_size": dbg.get("pool_size"),
+            "after_rerank": dbg.get("after_rerank"),
+            "after_trust_filter": dbg.get("after_trust_filter"),
+            "context_chunks_selected": dbg.get("context_chunks_selected"),
+            "grounding_gate_reason": dbg.get("grounding_gate_reason"),
+            "selected_sources": srcs,
+            "retrieval_hit_count": dbg.get("retrieval_hit_count"),
+            "retrieval_ran": dbg.get("retrieval_ran"),
+            "fallback_to_general": dbg.get("fallback_to_general"),
+            "exception_summary": dbg.get("exception_summary"),
+        }
+        # Keep raw debug event rows when present (bounded in size already).
+        for k in ("top_pool_hits", "top_ranked_pre_trust", "top_trusted_hits"):
+            if k in dbg:
+                diag[k] = dbg.get(k)
+        # Attach to turn and store as last snapshot for debug endpoints.
+        turn = AssistantTurn(**{**turn.__dict__, "diagnostics": diag})
+        debug_service.set_last_diagnostics(diag)
     from app.reliability.turn_log import log_reliability_turn
 
     log_reliability_turn(turn, **dbg)
@@ -329,7 +371,11 @@ def _answer_user_query_impl(
         debug_service.log_retrieval_event("index_sync_failed", sync_message=_sync_msg[:300])
         text, gerr = _general_or_abstain(query)
         return _finalize_answer(
-            AssistantTurn(mode="general", text=text, assistant_note=MSG_LIBRARY_UNAVAILABLE),
+            AssistantTurn(
+                mode="general",
+                text=text,
+                assistant_note=(_sync_msg or MSG_LIBRARY_UNAVAILABLE),
+            ),
             routing="general_sync_fallback",
             retrieval_ran=False,
             retrieval_hit_count=0,
@@ -401,10 +447,19 @@ def _answer_user_query_impl(
         faiss_folder=str(faiss_folder.resolve()),
     )
 
+    # Diagnostics captured for debug mode (and optionally attached to responses).
+    diag_pool_size: int | None = None
+    diag_after_rerank: int | None = None
+    diag_after_trust: int | None = None
+    diag_ctx_selected: int | None = None
+    diag_gate_reason: str | None = None
+
     base_pool = hybrid_pool_size(nvec, int(top_k))
     broad_overview = is_broad_document_overview_query(query)
     relaxed_doc_gate = uses_relaxed_document_grounding_gate(query)
-    wide_retrieval = broad_overview or relaxed_doc_gate
+    section_nav = is_section_navigation_query(query)
+    lookup_relaxed = is_sparse_entity_lookup_query(query)
+    wide_retrieval = broad_overview or relaxed_doc_gate or section_nav
     if wide_retrieval:
         k_pool = min(nvec, max(base_pool, 22))
         kv = min(nvec, max(32, min(48, nvec)))
@@ -429,6 +484,10 @@ def _answer_user_query_impl(
                     boost_q = (
                         f"{boost_q} performance latency p99 workload reliability metrics discussion"
                     ).strip()
+                if section_nav and not broad_overview:
+                    boost_q = (
+                        f"{boost_q} section heading chapter appendix subsection disaster recovery"
+                    ).strip()
                 pool_b = hybrid_retrieve(
                     store,
                     boost_q,
@@ -438,10 +497,15 @@ def _answer_user_query_impl(
                 )
                 pool_hits = merge_hybrid_hit_pools(pool_hits, pool_b)
             ranked_hits = rerank_hybrid_hits(pool_hits)
+            if section_nav:
+                ranked_hits = prioritize_section_navigation_hits(ranked_hits, query)
             n_after_rerank = len(ranked_hits)
             trusted_hits = document_health.filter_trusted_retrieval_hits(faiss_folder, ranked_hits)
             doc_good, gate_reason = document_health.explain_allow_document_grounding(
-                faiss_folder, trusted_hits, relaxed_doc_qa=relaxed_doc_gate
+                faiss_folder,
+                trusted_hits,
+                relaxed_doc_qa=relaxed_doc_gate,
+                lookup_qa_relaxed=lookup_relaxed,
             )
             hits = (
                 select_generation_context(
@@ -449,7 +513,11 @@ def _answer_user_query_impl(
                     mode="qa",
                     top_k=int(top_k),
                     nvec=nvec,
-                    broad_document_question=broad_overview or relaxed_doc_gate,
+                    broad_document_question=broad_overview or relaxed_doc_gate or section_nav,
+                    section_navigation_query=section_nav,
+                    focus_source_name=str(trusted_hits[0].metadata.get("source_name") or "").strip()
+                    if (trusted_hits and (lookup_relaxed or section_nav))
+                    else None,
                 )
                 if doc_good
                 else []
@@ -461,6 +529,8 @@ def _answer_user_query_impl(
                 broad_overview=broad_overview,
                 wide_retrieval=wide_retrieval,
                 relaxed_doc_gate=relaxed_doc_gate,
+                section_navigation=section_nav,
+                lookup_qa_relaxed=lookup_relaxed,
                 pool_size=len(pool_hits),
                 after_rerank=n_after_rerank,
                 after_trust_filter=len(trusted_hits),
@@ -471,6 +541,11 @@ def _answer_user_query_impl(
                 top_ranked_pre_trust=_hit_debug_rows(ranked_hits, 8),
                 top_trusted_hits=_hit_debug_rows(trusted_hits, 8),
             )
+            diag_pool_size = len(pool_hits)
+            diag_after_rerank = n_after_rerank
+            diag_after_trust = len(trusted_hits)
+            diag_ctx_selected = len(hits)
+            diag_gate_reason = gate_reason
             ranked_hits = trusted_hits
     except Exception as exc:
         if debug_service.debug_enabled():
@@ -531,6 +606,15 @@ def _answer_user_query_impl(
         web_snippet_count=len(web_snippets_list),
         llm_gets_grounded_prompt=bool(doc_good and hits),
     )
+
+    common_diag = {
+        "route_selected": _route,
+        "pool_size": diag_pool_size,
+        "after_rerank": diag_after_rerank,
+        "after_trust_filter": diag_after_trust,
+        "context_chunks_selected": diag_ctx_selected,
+        "grounding_gate_reason": diag_gate_reason,
+    }
 
     def _gen_web(note: str | None = None) -> AssistantTurn:
         if stream:
@@ -594,12 +678,15 @@ def _answer_user_query_impl(
                 retrieval_ran=True,
                 retrieval_hit_count=len(hits),
                 fallback_to_general=False,
+                **common_diag,
             )
         if doc_good:
             if stream:
 
                 def _gtok() -> Iterator[str]:
-                    yield from stream_grounded_answer_tokens(query, hits)
+                    yield from stream_grounded_answer_tokens(
+                        query, hits, section_navigation_query=section_nav
+                    )
 
                 return _finalize_answer(
                     AssistantTurn(
@@ -613,10 +700,13 @@ def _answer_user_query_impl(
                     retrieval_ran=True,
                     retrieval_hit_count=len(hits),
                     fallback_to_general=False,
+                    **common_diag,
                 )
             try:
                 with timed_phase("generation"):
-                    ga = generate_grounded_answer(query, hits)
+                    ga = generate_grounded_answer(
+                        query, hits, section_navigation_query=section_nav
+                    )
             except Exception as exc:
                 if debug_service.debug_enabled():
                     debug_service.merge(
@@ -636,6 +726,7 @@ def _answer_user_query_impl(
                     retrieval_hit_count=len(hits),
                     fallback_to_general=True,
                     exception_summary=exc_sum,
+                    **common_diag,
                 )
             return _finalize_answer(
                 AssistantTurn(
@@ -649,6 +740,7 @@ def _answer_user_query_impl(
                 retrieval_ran=True,
                 retrieval_hit_count=len(hits),
                 fallback_to_general=False,
+                **common_diag,
             )
         if web_snippets_list and web_strong:
             return _finalize_answer(
@@ -657,6 +749,7 @@ def _answer_user_query_impl(
                 retrieval_ran=True,
                 retrieval_hit_count=len(hits),
                 fallback_to_general=True,
+                **common_diag,
             )
         if web_snippets_list:
             if user_expects_document_grounding(query):

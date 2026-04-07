@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from app.retrieval.vector_store import (
 )
 from app.services import debug_service
 from app.services.message_service import (
+    MSG_LIBRARY_NEEDS_SYNC,
     MSG_NO_DOCS,
     MSG_PREPARE_DOCS_FAILED,
     MSG_PREPARE_SETTINGS_HINT,
@@ -93,6 +95,38 @@ def library_fingerprint(raw_dir: Path) -> tuple[tuple[str, int], ...]:
     """Legacy mtime-based fingerprint (e.g. quick display). Prefer :func:`library_content_fingerprint` for sync."""
     files = list_raw_files(raw_dir)
     return tuple((p.name, int(p.stat().st_mtime_ns)) for p in files)
+
+
+def library_quick_fingerprint(raw_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    """
+    Cheap change detector for chat-time checks: (filename, mtime_ns, size_bytes), sorted by name.
+
+    This avoids hashing full file contents on every chat turn (which is too slow for large libraries).
+    """
+    files = list_raw_files(raw_dir)
+    out: list[tuple[str, int, int]] = []
+    for p in files:
+        st = p.stat()
+        out.append((p.name, int(st.st_mtime_ns), int(st.st_size)))
+    return tuple(out)
+
+
+def library_needs_user_sync(raw_dir: Path, faiss_folder: Path) -> bool:
+    """
+    True when ``raw_dir`` has library files but the FAISS index state does not match the
+    current quick fingerprint (user should run Sync). Empty library → False.
+    """
+    quick = library_quick_fingerprint(raw_dir)
+    if not quick:
+        return False
+    if not faiss_index_files_exist(faiss_folder, index_name=DEFAULT_INDEX_NAME):
+        return True
+    state = index_library_state.load_state(faiss_folder)
+    state_quick = state.get("files_quick") if isinstance(state, dict) else None
+    expected = [list(x) for x in quick]
+    if not isinstance(state_quick, list) or state_quick != expected:
+        return True
+    return False
 
 
 @st.cache_resource(show_spinner=False)
@@ -307,6 +341,7 @@ def rebuild_knowledge_index(
                 "files": dict(current_hashes),
                 "vector_count": nvec,
                 "file_chunk_counts": file_chunk_counts,
+                "files_quick": [list(x) for x in library_quick_fingerprint(raw_dir)],
             },
         )
         changed_ct = len(current_hashes) - len(unchanged_names)
@@ -337,27 +372,72 @@ def ensure_index_matches_library(
     chunk_size: int,
     chunk_overlap: int,
 ) -> tuple[bool, str]:
-    fp = library_content_fingerprint(raw_dir)
-    if not fp:
+    # For Streamlit, preserve the existing behavior: a Sync in the UI sets a session fingerprint,
+    # and chat can auto-sync if the session is out of date.
+    if _streamlit_script_running():
+        fp = library_content_fingerprint(raw_dir)
+        if not fp:
+            if debug_service.debug_enabled():
+                debug_service.merge(library_content_fingerprint="(empty)", index_sync="none_no_files")
+            return False, MSG_NO_DOCS
+
+        synced = st.session_state.get("kb_sync_fingerprint")
+        index_ready = faiss_index_files_exist(faiss_folder, index_name=DEFAULT_INDEX_NAME)
+
         if debug_service.debug_enabled():
-            debug_service.merge(library_content_fingerprint="(empty)", index_sync="none_no_files")
+            debug_service.merge(
+                library_content_fingerprint=_fmt_content_fp_short(fp),
+                kb_sync_matches=(synced == fp),
+            )
+
+        if index_ready and synced is not None and synced == fp:
+            if debug_service.debug_enabled():
+                debug_service.merge(index_sync="reused")
+            return True, ""
+
+        ok, msg, _, _action = rebuild_knowledge_index(
+            raw_dir,
+            faiss_folder,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+        if ok:
+            st.session_state.kb_sync_fingerprint = fp
+            if debug_service.debug_enabled():
+                debug_service.merge(index_sync="rebuilt", ensure_rebuild_ok=True)
+            return True, ""
+        if debug_service.debug_enabled():
+            debug_service.merge(index_sync="rebuild_failed", ensure_error_summary=str(msg)[:200])
+        return False, msg
+
+    # For API / non-Streamlit usage, do NOT hash every file per chat turn.
+    # Instead, compare a quick (mtime,size) fingerprint against the last successful Sync state.
+    quick = library_quick_fingerprint(raw_dir)
+    if not quick:
+        if debug_service.debug_enabled():
+            debug_service.merge(library_quick_fingerprint="(empty)", index_sync="none_no_files")
         return False, MSG_NO_DOCS
 
-    synced = (
-        st.session_state.get("kb_sync_fingerprint") if _streamlit_script_running() else None
-    )
     index_ready = faiss_index_files_exist(faiss_folder, index_name=DEFAULT_INDEX_NAME)
+    state = index_library_state.load_state(faiss_folder)
+    state_quick = state.get("files_quick") if isinstance(state, dict) else None
+    ok_quick = bool(index_ready and isinstance(state_quick, list) and state_quick == [list(x) for x in quick])
 
     if debug_service.debug_enabled():
         debug_service.merge(
-            library_content_fingerprint=_fmt_content_fp_short(fp),
-            kb_sync_matches=(synced == fp),
+            index_ready=bool(index_ready),
+            quick_fp_match=bool(ok_quick),
         )
 
-    if index_ready and synced is not None and synced == fp:
+    if ok_quick:
         if debug_service.debug_enabled():
-            debug_service.merge(index_sync="reused")
+            debug_service.merge(index_sync="reused_quick")
         return True, ""
+
+    # Optional escape hatch: auto-sync on chat for API usage (not recommended for large libraries).
+    auto = os.environ.get("KA_AUTO_SYNC_ON_CHAT", "").strip().lower() in ("1", "true", "yes", "on")
+    if not auto:
+        return False, MSG_LIBRARY_NEEDS_SYNC
 
     ok, msg, _, _action = rebuild_knowledge_index(
         raw_dir,
@@ -366,11 +446,9 @@ def ensure_index_matches_library(
         chunk_overlap=chunk_overlap,
     )
     if ok:
-        if _streamlit_script_running():
-            st.session_state.kb_sync_fingerprint = fp
         if debug_service.debug_enabled():
-            debug_service.merge(index_sync="rebuilt", ensure_rebuild_ok=True)
+            debug_service.merge(index_sync="rebuilt_auto", ensure_rebuild_ok=True)
         return True, ""
     if debug_service.debug_enabled():
-        debug_service.merge(index_sync="rebuild_failed", ensure_error_summary=str(msg)[:200])
+        debug_service.merge(index_sync="rebuild_failed_auto", ensure_error_summary=str(msg)[:200])
     return False, msg

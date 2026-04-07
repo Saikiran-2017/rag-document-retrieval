@@ -19,6 +19,7 @@ export interface ChatAnswer {
   sources?: SourceRef[] | null;
   validation_warning?: string | null;
   retrieval_chunk_count?: number | null;
+  diagnostics?: Record<string, unknown> | null;
 }
 
 export interface MessageOut {
@@ -38,6 +39,14 @@ export interface DocumentRow {
   health: string;
   note: string | null;
   updated_at: string | null;
+  extraction_quality?: string;
+  extraction_hint?: string | null;
+}
+
+export interface DocumentsListResponse {
+  documents: DocumentRow[];
+  count: number;
+  library_needs_sync?: boolean;
 }
 
 export interface UiAssistantMeta {
@@ -46,6 +55,7 @@ export interface UiAssistantMeta {
   web_sources?: Array<Record<string, string>>;
   status_note?: string;
   validation_warning?: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type UiMessage =

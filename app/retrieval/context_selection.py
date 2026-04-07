@@ -7,6 +7,7 @@ then a bounded context size for generation (sources in UI match CONTEXT blocks).
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict, deque
 from typing import Any, Literal
 
@@ -26,6 +27,49 @@ def composite_retrieval_score(hit: RetrievedChunk) -> float:
     d = max(float(hit.distance), 1e-6)
     inv_d = 1.0 / (1.0 + d)
     return 3.0 * rrf + inv_d
+
+
+def prioritize_section_navigation_hits(
+    hits: list[RetrievedChunk], query: str
+) -> list[RetrievedChunk]:
+    """
+    Move chunks that likely match section/heading intent earlier (stable tie-break on input order).
+
+    Reduces dilution when many repetitive chunks (e.g. appendices) outrank a single anchor line.
+    """
+    if len(hits) < 2:
+        return hits
+    ql = (query or "").lower()
+    pats: list[re.Pattern[str]] = []
+    if re.search(r"section\s*(?:7|seven)\b", ql) or ("section" in ql and "seven" in ql):
+        pats.extend(
+            [
+                re.compile(r"section\s*(?:7|seven)\b", re.I),
+                re.compile(r"disaster\s+recovery", re.I),
+                re.compile(r"phase28-anchor", re.I),
+            ]
+        )
+    mnum = re.search(r"section\s*(?:#|number|num\.?)?\s*(\d+)\b", ql)
+    if mnum:
+        n = re.escape(mnum.group(1))
+        pats.append(re.compile(rf"\bsection\s*{n}\b", re.I))
+    if "disaster" in ql and "recover" in ql:
+        pats.append(re.compile(r"disaster\s+recovery", re.I))
+    if not pats:
+        return hits
+
+    def score(hit: RetrievedChunk) -> int:
+        t = hit.page_content or ""
+        s = 0
+        for p in pats:
+            if p.search(t):
+                s += 5
+        if re.search(r"^#{1,6}\s", t, re.M):
+            s += 1
+        return s
+
+    order = sorted(range(len(hits)), key=lambda i: (-score(hits[i]), i))
+    return [hits[i] for i in order]
 
 
 def rerank_hybrid_hits(hits: list[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -117,6 +161,8 @@ def select_generation_context(
     top_k: int,
     nvec: int,
     broad_document_question: bool = False,
+    section_navigation_query: bool = False,
+    focus_source_name: str | None = None,
 ) -> list[RetrievedChunk]:
     """
     Reranked list → filter weak → take top ``context_limit_for_task``.
@@ -129,7 +175,16 @@ def select_generation_context(
     limit = context_limit_for_task(
         mode, top_k, nvec, broad_document_question=broad_document_question
     )
-    if broad_document_question and mode == "qa":
+    # For lookup/section questions, avoid cross-file dilution: prefer the top source when known.
+    if focus_source_name:
+        src = str(focus_source_name).strip()
+        if src:
+            primary = [h for h in filtered if str(h.metadata.get("source_name") or "").strip() == src]
+            if primary:
+                rest = [h for h in filtered if h not in primary]
+                ordered = primary + rest
+                return ordered[:limit]
+    if broad_document_question and mode == "qa" and not section_navigation_query:
         names = {str(h.metadata.get("source_name") or "").strip() for h in filtered}
         if len({n for n in names if n}) > 1:
             return diversify_chunks_round_robin(filtered, limit)

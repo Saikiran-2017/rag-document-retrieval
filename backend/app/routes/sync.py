@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import time
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.schemas.common import SyncRequest, SyncResponse
 from backend.app.services import index_service
+from app.services import debug_service
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
@@ -30,12 +32,14 @@ def sync_index(
     settings.raw_dir.mkdir(parents=True, exist_ok=True)
     settings.faiss_dir.mkdir(parents=True, exist_ok=True)
 
+    t0 = time.perf_counter()
     ok, msg, nvec, action = index_service.rebuild_knowledge_index(
         settings.raw_dir,
         settings.faiss_dir,
         chunk_size=cs,
         chunk_overlap=co,
     )
+    took_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     fp = list(index_service.library_content_fingerprint(settings.raw_dir))
     pairs = [[a, b] for a, b in fp]
 
@@ -47,6 +51,7 @@ def sync_index(
             vector_count=nvec,
             sync_action="failed",
             content_fingerprint=pairs if fp else None,
+            diagnostics={"timing_ms_total": took_ms} if debug_service.debug_enabled() else None,
         )
         return JSONResponse(status_code=500, content=r.model_dump(mode="json"))
 
@@ -64,4 +69,5 @@ def sync_index(
         vector_count=nvec,
         sync_action=action,
         content_fingerprint=pairs if fp else None,
+        diagnostics={"timing_ms_total": took_ms} if debug_service.debug_enabled() else None,
     )

@@ -28,4 +28,5 @@ def chat_response_from_turn(turn: AssistantTurn) -> ChatResponse:
         sources=sources,
         validation_warning=vw,
         retrieval_chunk_count=rcount,
+        diagnostics=turn.diagnostics,
     )

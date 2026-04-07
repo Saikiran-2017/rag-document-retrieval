@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from app.ingestion.extraction_signals import lightweight_extraction_signal
 from app.persistence import document_manifest
+from app.services import index_service
 from app.services.index_service import list_raw_files
 
 FileHealthStatus = Literal["uploaded", "processing", "ready", "ready_limited", "failed"]
@@ -61,14 +63,31 @@ def list_document_catalog(raw_dir: Path, faiss_folder: Path) -> list[dict[str, A
                 except (TypeError, ValueError):
                     pass
 
+        sig = lightweight_extraction_signal(path)
+        exq = str(sig.get("quality") or "unknown")
+        exh = sig.get("note")
+        exh_s = str(exh).strip() if exh else None
+
         rows.append(
             {
                 "filename": name,
                 "health": health,
                 "note": note,
                 "updated_at": _iso(updated_ts),
+                "extraction_quality": exq,
+                "extraction_hint": exh_s,
             }
         )
 
     rows.sort(key=lambda r: r["filename"].lower())
     return rows
+
+
+def documents_list_api_payload(raw_dir: Path, faiss_folder: Path) -> dict[str, Any]:
+    """Response body for ``GET /documents`` including library-level readiness."""
+    docs = list_document_catalog(raw_dir, faiss_folder)
+    return {
+        "documents": docs,
+        "count": len(docs),
+        "library_needs_sync": index_service.library_needs_user_sync(raw_dir, faiss_folder),
+    }

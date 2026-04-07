@@ -34,6 +34,7 @@ function AssistantBody({ text, streaming }: { text: string; streaming?: boolean 
 
 export function ChatThread({ messages }: { messages: UiMessage[] }) {
   const endRef = useRef<HTMLDivElement>(null);
+  const showDiag = typeof window !== "undefined" && window.localStorage?.getItem("KA_DEBUG") === "1";
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
@@ -73,6 +74,16 @@ export function ChatThread({ messages }: { messages: UiMessage[] }) {
               ) : null}
               {m.meta?.web_sources?.length ? (
                 <WebSourcesPanel items={m.meta.web_sources} />
+              ) : null}
+              {showDiag && m.meta?.diagnostics ? (
+                <details className="mt-4 rounded-lg border border-stone-200/80 bg-stone-50 px-3.5 py-2.5 text-xs text-stone-700">
+                  <summary className="cursor-pointer select-none font-medium text-stone-700">
+                    Developer diagnostics
+                  </summary>
+                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-snug">
+                    {JSON.stringify(m.meta.diagnostics, null, 2)}
+                  </pre>
+                </details>
               ) : null}
             </div>
           </div>

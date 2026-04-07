@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.services.library_catalog import list_document_catalog
+from app.services.library_catalog import documents_list_api_payload
 from app.services.library_delete import delete_library_document
 
 from backend.app.core.config import Settings, get_settings
@@ -18,9 +18,13 @@ def list_documents(settings: Settings = Depends(get_settings)) -> DocumentsListR
 
     Health values: ``uploaded``, ``processing``, ``ready``, ``ready_limited``, ``failed``.
     """
-    rows = list_document_catalog(settings.raw_dir, settings.faiss_dir)
-    docs = [DocumentRow(**r) for r in rows]
-    return DocumentsListResponse(documents=docs, count=len(docs))
+    payload = documents_list_api_payload(settings.raw_dir, settings.faiss_dir)
+    docs = [DocumentRow(**r) for r in payload["documents"]]
+    return DocumentsListResponse(
+        documents=docs,
+        count=int(payload["count"]),
+        library_needs_sync=bool(payload["library_needs_sync"]),
+    )
 
 
 @router.delete("")

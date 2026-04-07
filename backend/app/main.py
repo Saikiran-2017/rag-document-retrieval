@@ -30,6 +30,7 @@ from app.persistence import chat_store
 
 from backend.app.core.config import get_cors_allow_origins
 from backend.app.routes import chat, chats, documents, health, sync, upload
+from backend.app.routes import debug
 
 
 def _is_production_env() -> bool:
@@ -68,4 +69,5 @@ v1.include_router(sync.router)
 v1.include_router(documents.router)
 v1.include_router(chat.router)
 v1.include_router(chats.router)
+v1.include_router(debug.router)
 app.include_router(v1)
