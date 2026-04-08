@@ -2,6 +2,12 @@
 
 This script is optimized for live demos, recruiter screenshares, and interview walkthroughs.
 
+### 0) Prerequisites (30 seconds before you share screen)
+
+- **Real `OPENAI_API_KEY`:** prefer **`.env.local`** (gitignored). If **`.env`** still contains a template key, that is fine—the loader uses the first **valid** key (see root **README**).
+- Quick check (prints **masked** key only): `set PYTHONPATH=.` then `python scripts/verify_openai_env.py` → exit **0**, `ready_for_local_dev: true`.
+- Start **Next.js + API** or **Streamlit** as in the root README.
+
 ### 1) Show the empty state
 
 - Open the web UI (`http://localhost:3000`).

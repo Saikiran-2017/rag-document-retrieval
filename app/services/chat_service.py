@@ -578,9 +578,16 @@ def _answer_user_query_impl(
             best_rrf=float(top.metadata.get("rrf_score", 0)) if top else None,
         )
 
-    web_snippets_list, web_block, web_dicts, shaped_web_q = prepare_web_for_generation(query, rewritten)
-    web_strong = web_results_strong_enough(web_snippets_list, shaped_query=shaped_web_q)
-    web_allowed_urls = [s.url for s in web_snippets_list]
+    # Web search can be slow; avoid it on the common grounded-doc path unless blending is desired.
+    wants_web = (not doc_good) or _wants_blended_web(query)
+    if wants_web:
+        web_snippets_list, web_block, web_dicts, shaped_web_q = prepare_web_for_generation(query, rewritten)
+        web_strong = web_results_strong_enough(web_snippets_list, shaped_query=shaped_web_q)
+        web_allowed_urls = [s.url for s in web_snippets_list]
+    else:
+        web_snippets_list, web_block, web_dicts, shaped_web_q = [], "", None, ""
+        web_strong = False
+        web_allowed_urls = []
     stream = _streaming_enabled()
 
     if debug_service.debug_enabled():

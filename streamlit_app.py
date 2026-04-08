@@ -10,6 +10,7 @@ from typing import Any
 
 import streamlit as st
 
+from app import streamlit_icons as st_icons
 from app.ingestion.loader import get_default_raw_dir
 from app.persistence import chat_store, document_manifest
 from app.retrieval.vector_store import get_default_faiss_folder
@@ -624,7 +625,10 @@ def render_sidebar_documents_and_actions(
                         st.session_state.kb_sync_fingerprint = (
                             index_service.library_content_fingerprint(raw_dir)
                         )
-                    st.toast((msg or ("Removed" if ok else "Could not remove"))[:200])
+                    st.toast(
+                        (msg or ("Removed" if ok else "Could not remove"))[:200],
+                        icon=st_icons.TOAST_DELETE if ok else st_icons.TOAST_ERROR,
+                    )
                     st.rerun()
             note = row.get("user_facing_note")
             if not note and row.get("retrieval_quality_note") and row.get("retrieval_quality") == "weak":
@@ -1078,9 +1082,9 @@ st.markdown(
 )
 
 if st.session_state.pop("_ka_sync_toast", False):
-    st.toast("Synced", icon="✓")
+    st.toast("Synced", icon=st_icons.TOAST_SYNC)
 if st.session_state.pop("_ka_ingest_toast", False):
-    st.toast("Added to library", icon="✓")
+    st.toast("Added to library", icon=st_icons.TOAST_LIBRARY)
 
 with st.sidebar:
     st.markdown(f'<p class="ka-brand-title">{html.escape(APP_NAME)}</p>', unsafe_allow_html=True)

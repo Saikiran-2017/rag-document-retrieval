@@ -35,6 +35,7 @@ from app.services.message_service import (
     MSG_PREPARE_DOCS_FAILED,
     MSG_PREPARE_SETTINGS_HINT,
     MSG_READ_FILES_FAILED,
+    MSG_SERVICE_UNAVAILABLE,
 )
 from app.services.upload_service import SUPPORTED_EXT
 from app.utils.chunker import chunk_ingested_documents
@@ -204,7 +205,12 @@ def rebuild_knowledge_index(
         return False, MSG_PREPARE_SETTINGS_HINT, 0, "failed"
 
     model = DEFAULT_EMBEDDING_MODEL
-    embeddings = cached_openai_embeddings(model)
+    try:
+        embeddings = cached_openai_embeddings(model)
+    except Exception as exc:
+        msg = str(exc) or MSG_SERVICE_UNAVAILABLE
+        document_manifest.mark_index_failure(faiss_folder, msg)
+        return False, msg, 0, "failed"
     cache_root = cache_dir_for(faiss_folder, model)
 
     try:

@@ -2,6 +2,17 @@
 
 Add images under `docs/images/` and link them from `README.md`.
 
+### Portfolio order (working product)
+
+For a **release / showcase** repo, capture the **happy path first** so reviewers see grounded behavior immediately:
+
+1. **`web_library_ready.png`** — documents listed with healthy readiness (proves sync + manifest).
+2. **`web_grounded_sources.png`** — answer with `[SOURCE n]` and Sources panel (proves RAG).
+3. **`web_empty.png`** — clean hero (optional opener).
+4. **`web_general.png`** — honest **general** mode when the library is empty or the question is off-doc (proves routing).
+
+Then add upload/sync/diagnostics as needed (see below).
+
 ### Must-have captures
 
 - **Empty state (web)**: `web` app, no messages, sidebar visible.

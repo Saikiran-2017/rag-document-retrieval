@@ -1,18 +1,20 @@
 """Load optional local env files without overriding process/host variables.
 
-Secret resolution order (each variable):
+**Non-secret keys:** merged from ``.env`` then ``.env.local`` (local wins on duplicates);
+each is applied only if **missing** from the process environment (host wins).
 
-1. **Process environment** — always wins (Render, Docker, CI, shell). Never overwritten
-   by files.
-2. **Files (merged):** values from ``.env`` and ``.env.local`` are combined; if both
-   define the same key, **``.env.local`` wins** (preferred for local secrets).
-3. **Application:** for keys other than ``OPENAI_API_KEY``, a variable is set from files
-   only if it is **missing** from the process environment.
-4. **``OPENAI_API_KEY``:** a blank or whitespace-only process value is treated as unset so
-   ``.env`` / ``.env.local`` can still supply the key.
+**``OPENAI_API_KEY``** (snapshot process **once** at load start, then resolve):
 
-**Never loaded:** ``.env.example``, ``.env.local.template``, or any other tracked sample
-file — only ``.env`` and ``.env.local`` at the repo root.
+1. If the snapshot is **non-empty and not a placeholder** → use it (CI/Docker/Render).
+2. Else if ``.env.local`` has a **non-placeholder** value → use it.
+3. Else if ``.env`` has a **non-placeholder** value → use it.
+4. Else → remove ``OPENAI_API_KEY`` from the environment if it was only a placeholder
+   (clear failure instead of silently keeping a sample key).
+
+Placeholders are detected by :func:`is_openai_key_placeholder` (sample templates, not real keys).
+
+**Never loaded:** ``.env.example``, ``.env.local.template``, or other tracked samples —
+only ``.env`` and ``.env.local`` at the repo root. Windows paths use :class:`pathlib.Path`.
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Set by load_repo_dotenv for describe_openai_key_for_diagnostics / verify script.
+_OPENAI_KEY_RESOLUTION_SOURCE: str = "none"
 
 
 def is_openai_key_placeholder(key: str) -> tuple[bool, str]:
@@ -46,25 +51,48 @@ def is_openai_key_placeholder(key: str) -> tuple[bool, str]:
     return False, ""
 
 
-def _env_file_nonempty(key: str) -> bool:
-    return bool((os.environ.get(key) or "").strip())
+def _pick_openai_api_key(
+    process_snapshot: str,
+    local_val: str | None,
+    root_val: str | None,
+) -> tuple[str | None, str]:
+    """First valid (non-placeholder) key wins: process, then ``.env.local``, then ``.env``."""
+    proc = (process_snapshot or "").strip()
+    if proc and not is_openai_key_placeholder(proc)[0]:
+        return proc, "process_environment"
+    for raw, label in ((local_val, ".env.local"), (root_val, ".env")):
+        v = (raw or "").strip()
+        if v and not is_openai_key_placeholder(v)[0]:
+            return v, label
+    return None, "none"
 
 
 def load_repo_dotenv(root: Path | None = None) -> None:
-    """Merge ``.env`` then ``.env.local`` into the environment (host wins)."""
+    """Merge ``.env`` / ``.env.local`` into the environment; resolve ``OPENAI_API_KEY`` explicitly."""
+    global _OPENAI_KEY_RESOLUTION_SOURCE
+    base = (root or _REPO_ROOT).resolve()
+    process_snapshot = (os.environ.get("OPENAI_API_KEY") or "").strip()
     try:
         from dotenv import dotenv_values
     except ImportError:
+        _OPENAI_KEY_RESOLUTION_SOURCE = "none"
         return
-    base = (root or _REPO_ROOT).resolve()
-    merged = {**dotenv_values(base / ".env"), **dotenv_values(base / ".env.local")}
+    root_d = dotenv_values(base / ".env") or {}
+    local_d = dotenv_values(base / ".env.local") or {}
+    merged = {**root_d, **local_d}
+    local_oai = local_d.get("OPENAI_API_KEY")
+    root_oai = root_d.get("OPENAI_API_KEY")
+    picked, src = _pick_openai_api_key(process_snapshot, local_oai, root_oai)
+    _OPENAI_KEY_RESOLUTION_SOURCE = src
+    if picked:
+        os.environ["OPENAI_API_KEY"] = picked
+    else:
+        os.environ.pop("OPENAI_API_KEY", None)
+
     for key, value in merged.items():
         if value is None:
             continue
         if key == "OPENAI_API_KEY":
-            if _env_file_nonempty(key):
-                continue
-            os.environ[key] = value
             continue
         if key not in os.environ:
             os.environ[key] = value
@@ -102,8 +130,8 @@ def describe_openai_key_for_diagnostics(root: Path | None = None) -> dict[str, A
     ph, why = is_openai_key_placeholder(key)
     placeholder_hits: list[str] = [] if not ph else [why]
 
-    would_resolve_from = "none"
-    if key:
+    would_resolve_from = _OPENAI_KEY_RESOLUTION_SOURCE
+    if key and would_resolve_from == "none":
         if file_local and key == file_local:
             would_resolve_from = ".env.local"
         elif file_root and key == file_root:

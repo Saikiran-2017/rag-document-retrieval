@@ -53,4 +53,5 @@ Embed in the root **README** once files exist.
 
 ## Quality signal (for interviews)
 
-- Run **`pytest`** for fast checks; run **`scripts/run_document_qa_eval.py`** with a real key for the full 8-case gold suite (routing, anchors, refusals, citations). Reports under `eval/_report*.json` are gitignored by default.
+- Run **`pytest`** for fast checks (no API key).
+- With a real key: **`scripts/verify_openai_env.py`** (masked diagnostics), **`scripts/phase28_real_docs_pack.py`** (sync + real-doc queries), **`scripts/run_document_qa_eval.py`** (gold **8/8** when fully passing), and **`scripts/brutal_product_check.py`** (minimal end-to-end sync + chat). Reports under `eval/_report*.json` and phase workdirs are gitignored by default.

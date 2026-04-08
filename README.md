@@ -108,7 +108,8 @@ pip install -r requirements.txt
 1. **Never commit real keys.** `.env`, `.env.local`, and most `*.env` files are **gitignored**.
 2. Copy **`.env.local.template`** → **`.env.local`** and paste your key there, **or** export `OPENAI_API_KEY` in the shell.
 3. **`.env.example`** and **`.env.local.template`** contain placeholders only and are **not** used as runtime secrets by default.
-4. Verify without printing the key: `set PYTHONPATH=.` then `.venv\Scripts\python.exe scripts/verify_openai_env.py` (optional `--ping-openai`).
+4. **`OPENAI_API_KEY` resolution (first valid wins):** a **real** key in the **process environment** (CI/Docker) takes precedence; otherwise the loader uses the first **non-placeholder** value from **`.env.local`**, then **`.env`**. Sample/template keys never override a real key in `.env.local`.
+5. Verify without printing the key: `set PYTHONPATH=.` then `python scripts/verify_openai_env.py` (optional `--ping-openai`).
 
 ### Run Streamlit
 
@@ -152,13 +153,28 @@ Summarized in **`.env.example`** (root) and **`web/.env.example`**. Highlights: 
 
 ---
 
+## Release validation (modest smoke)
+
+With a **real** `OPENAI_API_KEY` (typically **`.env.local`**) and network access, these scripts were used for recent release readiness. Your machine must still satisfy dependencies and billing.
+
+| Step | Command | What “good” looks like |
+|------|---------|-------------------------|
+| Env verify | `python scripts/verify_openai_env.py` | Exit **0**; `ready_for_local_dev: true`; `inferred_value_source` often **`.env.local`** for local dev |
+| Real-doc pack | `python scripts/phase28_real_docs_pack.py` | Sync **`ok=True`**, **`vector_count` > 0**, grounded chat probes |
+| Gold eval | `python scripts/run_document_qa_eval.py --json-report eval/_report_local.json` | **8/8** cases in the aggregate (exit **0** when all pass) |
+| Brutal product | `python scripts/brutal_product_check.py` | Exit **0** after temp sync + two grounded queries |
+
+**No API key:** `pytest` runs without OpenAI and should stay green. Eval JSON and phase workdirs are **gitignored** (see `.gitignore`).
+
+---
+
 ## Document QA eval (regression)
 
 With a real key and full `requirements.txt`:
 
 ```bash
 set PYTHONPATH=.
-.venv\Scripts\python.exe scripts/run_document_qa_eval.py --json-report eval/_report_local.json
+python scripts/run_document_qa_eval.py --json-report eval/_report_local.json
 ```
 
 JSON reports under `eval/_report*.json` are **gitignored** by default. See **[eval/README.md](eval/README.md)**.

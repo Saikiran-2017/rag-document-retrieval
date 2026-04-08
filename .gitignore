@@ -63,3 +63,8 @@ data/indexes/*
 # Eval harness temp index
 eval/_work/
 eval/_report*.json
+
+# Playwright / web E2E (if generated at repo root)
+test-results/
+playwright-report/
+playwright/.cache/

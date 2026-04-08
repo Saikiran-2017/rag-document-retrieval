@@ -48,7 +48,8 @@ class WebSnippet:
 
 
 def web_search_enabled() -> bool:
-    return os.environ.get("WEB_SEARCH_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+    # Default OFF for production-style trustworthiness and latency.
+    return os.environ.get("WEB_SEARCH_ENABLED", "0").strip().lower() not in ("0", "false", "no")
 
 
 def _max_for_llm() -> int:

@@ -2,6 +2,8 @@
 
 Practical options for hosting **Knowledge Assistant** in a portfolio-friendly way. The same RAG stack powers **Streamlit** and **FastAPI**; pick one primary surface for a free-tier demo, or run both.
 
+**Secrets:** inject `OPENAI_API_KEY` via your host or PaaS dashboard (never commit real keys). On a laptop, use gitignored **`.env.local`** for local overrides; the loader picks the first **valid** key and will not let a template line in **`.env`** override a real key in **`.env.local`** (see root **README**).
+
 ---
 
 ## 1. Streamlit only (simplest live demo)

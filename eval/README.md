@@ -27,7 +27,7 @@ set PYTHONPATH=.
 
 The runner disables streaming and web search for stable comparisons. If the key is invalid, exit code is `2` and the JSON report records `eval_status: "blocked"`.
 
-**Troubleshooting:** run **`scripts/verify_openai_env.py`** for a masked key check; or run this script with `--verbose-key` (or `KA_EVAL_KEY_DIAG=1`). An **empty** `OPENAI_API_KEY` in the process environment does not block loading from `.env.local` / `.env`.
+**Troubleshooting:** run **`scripts/verify_openai_env.py`** for a masked key check; or run this script with `--verbose-key` (or `KA_EVAL_KEY_DIAG=1`). The app picks the first **valid** (non-placeholder) key: real **process** env wins in CI; locally, a real key in **`.env.local`** overrides sample/template lines in **`.env`** or a bad value pre-set in the shell.
 
 **Retrieval pipeline (stderr JSON lines):** set `KA_RETRIEVAL_DEBUG=1` (or `KA_DEBUG=1`) while running Streamlit, the API, or this eval. Each chat turn emits structured events: `turn_begin`, `index_loaded`, `retrieval_hybrid_done` (pool sizes, top hit L2/RRF previews, grounding gate reason), and `routing_decision` (whether the LLM gets a grounded prompt).
 

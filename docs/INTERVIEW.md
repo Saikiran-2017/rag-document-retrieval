@@ -45,3 +45,9 @@ Knowledge Assistant is a production-style RAG app for document Q&A that prioriti
 - Structured retrieval logs (`KA_RETRIEVAL_DEBUG=1`).
 - Debug-only diagnostics on responses (`KA_DEBUG=1` + `localStorage.KA_DEBUG=1` in web UI).
 
+### Release / validation (how you prove it works)
+
+- **`pytest`** for regression without spend.
+- **`scripts/verify_openai_env.py`** for safe key + source hints (no full secret printed).
+- **`scripts/run_document_qa_eval.py`** for the gold document QA suite; **`scripts/brutal_product_check.py`** for a quick sync→chat smoke with real embeddings.
+

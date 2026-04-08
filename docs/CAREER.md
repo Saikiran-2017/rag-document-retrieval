@@ -1,20 +1,19 @@
 ## Recruiter-friendly GitHub “About” text
 
-**Document-grounded chat with honest routing:** upload PDFs/DOCX/TXT, sync to a local FAISS index, retrieve with hybrid search (BM25 + embeddings, RRF), and answer with citations only when retrieval strength and file health make it safe. Includes Streamlit + FastAPI + Next.js UIs, eval harness, and debug diagnostics.
+**Document-grounded chat with honest routing:** ingest PDFs/DOCX/TXT into a local FAISS index, hybrid retrieve (BM25 + embeddings, RRF), and answer with citations only when retrieval and per-file health justify it—plus Streamlit and FastAPI + Next.js UIs, gold eval harness, and safe local secret handling (`.env.local` overrides sample keys).
 
 ## Resume bullets (pick 3–5)
 
-- Built a production-style RAG document Q&A app with **hybrid retrieval** (FAISS + BM25, RRF fusion), **grounding gates**, and **per-file health** to prevent weak/unsafe citations on real corpora.
-- Implemented an end-to-end ingestion pipeline for **PDF/DOCX/TXT** with table-aware DOCX extraction, safer PDF fallbacks, optional OCR hooks, and heading-aware chunking for better section navigation.
-- Added **incremental indexing** with embedding cache + index state tracking to reduce rebuild time and cost while keeping sync correctness.
-- Shipped two frontends (Streamlit + **Next.js** chat UI) on a shared Python domain layer with **SSE streaming**, library readiness UX, and reliable upload→sync→ask workflow.
-- Created a regression-friendly eval harness and real-doc pack validating routing, retrieval anchors, refusals, and citations (benchmark **8/8 pass**), plus debug-only diagnostics for production triage.
+- Built a production-style RAG document Q&A app with **hybrid retrieval** (FAISS + BM25, RRF fusion), **grounding gates**, and **per-file health** so citations appear only when evidence is strong enough.
+- Implemented end-to-end ingestion for **PDF/DOCX/TXT** (table-aware DOCX, PDF fallbacks, optional OCR hooks) with **incremental indexing**, embedding disk cache, and FAISS on disk.
+- Shipped **Streamlit** and **FastAPI + Next.js** (SSE streaming, library readiness UX) on one shared **`app/`** domain layer—no duplicated retrieval logic in frontends.
+- Added **deterministic `OPENAI_API_KEY` resolution** for local dev (valid process key → `.env.local` → `.env`; placeholders never override real keys) plus **`verify_openai_env`** for masked checks.
+- Delivered regression tooling: **`pytest`**, gold **document QA eval** (8 cases: routing, anchors, refusals, forbidden tokens), **phase28 real-doc pack**, and **`brutal_product_check`** sync→chat smoke; debug diagnostics stay off by default.
 
 ## 60–90 second interview explanation
 
-“This project is a trust-focused RAG assistant. Uploads land in a raw library, Sync builds a FAISS index using OpenAI embeddings with a disk cache, and queries run hybrid retrieval (dense + BM25) fused with RRF. Before grounding, results go through rerank + trust filtering and a gating layer that decides whether we should cite documents or fall back to a general answer. The same shared `app/` layer powers Streamlit and a FastAPI + Next.js product UI. I also built an eval harness and debug-only diagnostics so regressions are easy to reproduce and inspect.”
+“This is a trust-first RAG assistant. Uploads go to a raw library; Sync parses, chunks, embeds with OpenAI, and writes FAISS plus a manifest with per-file readiness. Chat does hybrid retrieval—dense plus BM25 fused with RRF—then reranking, trust filtering, and grounding gates so we only cite documents when retrieval and file health support it; otherwise we answer in general mode instead of faking sources. The same `app/` package powers Streamlit and a Next.js client over FastAPI. I also hardened local secrets so a real key in `.env.local` wins over template lines, and I ship scripts for verify, gold eval, and a brutal sync-plus-chat check so regressions are easy to prove.”
 
 ## Portfolio summary paragraph
 
-Knowledge Assistant is an end-to-end RAG system designed for real documents and real UX: it provides a clean upload→sync→ask workflow, grounded answers with citations when evidence is strong, and deliberate fallbacks when it is not. The system combines FAISS vector search with BM25 keyword retrieval (RRF fusion), uses explicit trust gates to avoid misleading citations, and includes regression evaluation plus debug-mode diagnostics for production-style observability.
-
+Knowledge Assistant is an end-to-end RAG workspace: upload→sync→ask with grounded answers and `[SOURCE n]` citations when evidence is strong, and deliberate general/web/blended fallbacks when it is not. Hybrid retrieval, trust gates, incremental indexing, and SQLite chat history support a credible demo and a credible engineering story—backed by pytest, a gold eval harness, and optional real-doc packs for release checks.
