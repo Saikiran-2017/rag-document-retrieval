@@ -37,6 +37,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Playwright E2E isolated data (never commit)
+tests-e2e/.e2e-work/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

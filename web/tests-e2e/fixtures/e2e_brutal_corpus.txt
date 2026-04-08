@@ -1,0 +1,28 @@
+Playwright E2E Brutal Corpus
+============================
+
+Unique verification token: E2E_VERIFY_TOKEN_XY42NZ
+
+Executive note: CEO codename on record is BRUTAL_E2E_CEO_ANCHOR for internal drills only.
+
+Finance flash: stated quarter revenue is forty-two million USD (42,000,000).
+
+Disaster recovery: Section 7 of this playbook requires a tabletop exercise every quarter.
+
+## Reliability charter (filler for multi-chunk indexing)
+The ZEPHYR-E2E subsystem must maintain interactive p99 latency below four hundred milliseconds when measured at the edge proxy. Operators page the SRE on-call if the budget is exceeded for more than fifteen consecutive minutes. This paragraph exists so the eval corpus spans multiple embedding chunks for hybrid retrieval and grounding gates during Playwright end-to-end tests.
+
+## Operations checklist
+Daily: verify log shipping, confirm backup snapshots, and review error budgets. Weekly: run the retrieval self-probe against the canonical FAQ. Monthly: rotate API credentials used by the ingestion workers. The verification token E2E_VERIFY_TOKEN_XY42NZ must appear in any automated audit export for this document family.
+
+## Finance detail
+CFO sign-off is required before publishing revenue figures. The forty-two million USD figure is the authoritative quarter number for E2E scenarios. Do not round to 41.9M or 42.1M in grounded answers.
+
+## People roster (test anchors)
+CEO codename on record: BRUTAL_E2E_CEO_ANCHOR. Incident commander alias: E2E_IC_ANCHOR_7F3. These strings are intentional retrieval anchors.
+
+## Appendix A — repeated anchors for dense retrieval
+ZEPHYR-E2E latency SLO four hundred ms. ZEPHYR-E2E latency SLO four hundred ms. Token E2E_VERIFY_TOKEN_XY42NZ is the golden string for automated UI tests. BRUTAL_E2E_CEO_ANCHOR is the golden CEO codename string.
+
+## Appendix B — narrative padding
+Northwind-style reliability narratives help BM25 match section queries and disaster recovery language. When an operator asks about section seven, the assistant should surface tabletop exercise requirements. When an operator asks about revenue, the assistant should surface forty-two million USD. When an operator asks about the CEO codename, the assistant should surface BRUTAL_E2E_CEO_ANCHOR without inventing alternate names.

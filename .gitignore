@@ -68,3 +68,4 @@ eval/_report*.json
 test-results/
 playwright-report/
 playwright/.cache/
+web/tests-e2e/.e2e-work/
