@@ -26,6 +26,17 @@ from app.llm.generator import (
     stream_grounded_answer_tokens,
     stream_web_grounded_answer_tokens,
 )
+from app.llm.conversation_context import (
+    build_conversation_retrieval_hints,
+    effective_user_expects_document_grounding,
+    is_short_document_deictic_followup,
+)
+from app.llm.deterministic_extraction import (
+    try_answer_document_metadata_question,
+    try_answer_section_navigation_fallback,
+    try_build_grounded_document_overview,
+    try_extract_field_value_answer,
+)
 from app.llm.query_intent import (
     is_broad_document_overview_query,
     is_section_navigation_query,
@@ -205,9 +216,14 @@ def safe_document_abstain_answer(query: str) -> tuple[str, str | None]:
         return UNKNOWN_PHRASE, debug_service.short_exc(exc)
 
 
-def _general_or_abstain(query: str) -> tuple[str, str | None]:
+def _general_or_abstain(
+    query: str, *, document_scoped: bool | None = None
+) -> tuple[str, str | None]:
     """General chat only when the question is not clearly document-scoped."""
-    if user_expects_document_grounding(query):
+    scoped = (
+        user_expects_document_grounding(query) if document_scoped is None else document_scoped
+    )
+    if scoped:
         return safe_document_abstain_answer(query)
     return safe_general_answer(query)
 
@@ -338,7 +354,11 @@ def _answer_user_query_impl(
     chunk_size: int,
     chunk_overlap: int,
     top_k: int,
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> AssistantTurn:
+    conv_hints = build_conversation_retrieval_hints(query, conversation_history)
+    doc_intent = effective_user_expects_document_grounding(query, conv_hints)
+
     debug_service.log_retrieval_event(
         "turn_begin",
         raw_dir=str(raw_dir.resolve()),
@@ -349,7 +369,7 @@ def _answer_user_query_impl(
     )
 
     if not index_service.list_raw_files(raw_dir):
-        text, gerr = _general_or_abstain(query)
+        text, gerr = _general_or_abstain(query, document_scoped=doc_intent)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_no_library",
@@ -369,7 +389,7 @@ def _answer_user_query_impl(
     )
     if not ok:
         debug_service.log_retrieval_event("index_sync_failed", sync_message=_sync_msg[:300])
-        text, gerr = _general_or_abstain(query)
+        text, gerr = _general_or_abstain(query, document_scoped=doc_intent)
         return _finalize_answer(
             AssistantTurn(
                 mode="general",
@@ -383,7 +403,7 @@ def _answer_user_query_impl(
             exception_summary=gerr,
         )
 
-    if wants_no_retrieval_fastpath(query):
+    if wants_no_retrieval_fastpath(query) and not conv_hints.force_document_scoped_routing:
         if _streaming_enabled():
             return _finalize_answer(
                 AssistantTurn(
@@ -419,7 +439,7 @@ def _answer_user_query_impl(
                 retrieval_load_exception=debug_service.short_exc(exc),
                 retrieval_fallback_to_general=True,
             )
-        text, gerr = _general_or_abstain(query)
+        text, gerr = _general_or_abstain(query, document_scoped=doc_intent)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_retrieval_failed",
@@ -431,7 +451,7 @@ def _answer_user_query_impl(
 
     if nvec == 0:
         debug_service.log_retrieval_event("empty_vector_index", faiss_folder=str(faiss_folder.resolve()))
-        text, gerr = _general_or_abstain(query)
+        text, gerr = _general_or_abstain(query, document_scoped=doc_intent)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_empty_index",
@@ -456,10 +476,10 @@ def _answer_user_query_impl(
 
     base_pool = hybrid_pool_size(nvec, int(top_k))
     broad_overview = is_broad_document_overview_query(query)
-    relaxed_doc_gate = uses_relaxed_document_grounding_gate(query)
+    relaxed_doc_gate = uses_relaxed_document_grounding_gate(query) or conv_hints.relax_lookup_gate
     section_nav = is_section_navigation_query(query)
-    lookup_relaxed = is_sparse_entity_lookup_query(query)
-    wide_retrieval = broad_overview or relaxed_doc_gate or section_nav
+    lookup_relaxed = is_sparse_entity_lookup_query(query) or conv_hints.relax_lookup_gate
+    wide_retrieval = broad_overview or relaxed_doc_gate or section_nav or conv_hints.relax_lookup_gate
     if wide_retrieval:
         k_pool = min(nvec, max(base_pool, 22))
         kv = min(nvec, max(32, min(48, nvec)))
@@ -468,7 +488,12 @@ def _answer_user_query_impl(
         kv = min(28, nvec)
     try:
         t_rw = time.perf_counter()
-        rewritten = rewrite_for_retrieval(query)
+        retrieval_q = conv_hints.retrieval_query
+        # LLM rewrite can strip/deform merged follow-up queries ("in document" → unrelated text).
+        if conv_hints.force_document_scoped_routing:
+            rewritten = retrieval_q.strip()
+        else:
+            rewritten = rewrite_for_retrieval(retrieval_q)
         record_phase_ms("rewrite", (time.perf_counter() - t_rw) * 1000)
         with timed_phase("retrieval"):
             pool_hits = hybrid_retrieve(
@@ -501,12 +526,24 @@ def _answer_user_query_impl(
                 ranked_hits = prioritize_section_navigation_hits(ranked_hits, query)
             n_after_rerank = len(ranked_hits)
             trusted_hits = document_health.filter_trusted_retrieval_hits(faiss_folder, ranked_hits)
+            if wide_retrieval and len(trusted_hits) > 1:
+                trusted_hits = document_health.promote_alternate_top_for_limited_grounding(
+                    faiss_folder,
+                    trusted_hits,
+                    relaxed_doc_qa=relaxed_doc_gate,
+                    lookup_qa_relaxed=lookup_relaxed,
+                )
             doc_good, gate_reason = document_health.explain_allow_document_grounding(
                 faiss_folder,
                 trusted_hits,
                 relaxed_doc_qa=relaxed_doc_gate,
                 lookup_qa_relaxed=lookup_relaxed,
             )
+            focus_nm: str | None = None
+            if conv_hints.focus_source_name:
+                focus_nm = str(conv_hints.focus_source_name).strip() or None
+            elif trusted_hits and (lookup_relaxed or section_nav):
+                focus_nm = str(trusted_hits[0].metadata.get("source_name") or "").strip() or None
             hits = (
                 select_generation_context(
                     trusted_hits,
@@ -515,9 +552,7 @@ def _answer_user_query_impl(
                     nvec=nvec,
                     broad_document_question=broad_overview or relaxed_doc_gate or section_nav,
                     section_navigation_query=section_nav,
-                    focus_source_name=str(trusted_hits[0].metadata.get("source_name") or "").strip()
-                    if (trusted_hits and (lookup_relaxed or section_nav))
-                    else None,
+                    focus_source_name=focus_nm,
                 )
                 if doc_good
                 else []
@@ -526,6 +561,7 @@ def _answer_user_query_impl(
                 "retrieval_hybrid_done",
                 user_query_preview=query[:200],
                 rewritten_query=rewritten[:300],
+                retrieval_seed_preview=retrieval_q[:220],
                 broad_overview=broad_overview,
                 wide_retrieval=wide_retrieval,
                 relaxed_doc_gate=relaxed_doc_gate,
@@ -556,7 +592,7 @@ def _answer_user_query_impl(
         debug_service.log_retrieval_event(
             "retrieval_exception", error=debug_service.short_exc(exc)
         )
-        text, gerr = _general_or_abstain(query)
+        text, gerr = _general_or_abstain(query, document_scoped=doc_intent)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_retrieval_failed",
@@ -688,6 +724,56 @@ def _answer_user_query_impl(
                 **common_diag,
             )
         if doc_good:
+            # Filename / document identity from chunk metadata (no guessing beyond context).
+            meta_ans = try_answer_document_metadata_question(query, hits)
+            if meta_ans is not None:
+                fixed, warn = validate_grounded_answer(
+                    meta_ans.answer, hits, unknown_phrase=UNKNOWN_PHRASE
+                )
+                ga = GroundedAnswer(
+                    answer=fixed,
+                    sources=chunks_to_source_refs(hits),
+                    validation_warning=warn,
+                )
+                return _finalize_answer(
+                    AssistantTurn(
+                        mode="grounded",
+                        text=ga.answer,
+                        grounded=ga,
+                        hits=hits,
+                        assistant_note=ga.validation_warning,
+                    ),
+                    routing="grounded_deterministic_metadata",
+                    retrieval_ran=True,
+                    retrieval_hit_count=len(hits),
+                    fallback_to_general=False,
+                    **common_diag,
+                )
+            # Deterministic extraction for obvious field/value queries (prevents false refusals).
+            extracted = try_extract_field_value_answer(query, hits)
+            if extracted is not None:
+                fixed, warn = validate_grounded_answer(
+                    extracted.answer, hits, unknown_phrase=UNKNOWN_PHRASE
+                )
+                ga = GroundedAnswer(
+                    answer=fixed,
+                    sources=chunks_to_source_refs(hits),
+                    validation_warning=warn,
+                )
+                return _finalize_answer(
+                    AssistantTurn(
+                        mode="grounded",
+                        text=ga.answer,
+                        grounded=ga,
+                        hits=hits,
+                        assistant_note=ga.validation_warning,
+                    ),
+                    routing="grounded_deterministic_extract",
+                    retrieval_ran=True,
+                    retrieval_hit_count=len(hits),
+                    fallback_to_general=False,
+                    **common_diag,
+                )
             if stream:
 
                 def _gtok() -> Iterator[str]:
@@ -722,7 +808,7 @@ def _answer_user_query_impl(
                     )
                 text, gerr = (
                     safe_document_abstain_answer(query)
-                    if user_expects_document_grounding(query)
+                    if doc_intent
                     else safe_general_answer(query)
                 )
                 exc_sum = f"{debug_service.short_exc(exc)} | {gerr}" if gerr else debug_service.short_exc(exc)
@@ -735,6 +821,40 @@ def _answer_user_query_impl(
                     exception_summary=exc_sum,
                     **common_diag,
                 )
+            # If the model abstained on a broad "what is this document about?" style question,
+            # but retrieval clearly surfaces a dominant document with obvious structure,
+            # provide a conservative deterministic overview instead of a false refusal.
+            if UNKNOWN_PHRASE.lower() in (ga.answer or "").lower():
+                replaced_unknown = False
+                if section_nav:
+                    sec_fb = try_answer_section_navigation_fallback(query, hits)
+                    if sec_fb is not None:
+                        fixed, warn = validate_grounded_answer(
+                            sec_fb.answer, hits, unknown_phrase=UNKNOWN_PHRASE
+                        )
+                        ga = GroundedAnswer(
+                            answer=fixed,
+                            sources=chunks_to_source_refs(hits),
+                            validation_warning=warn,
+                        )
+                        replaced_unknown = True
+                if not replaced_unknown:
+                    overview = try_build_grounded_document_overview(query, hits)
+                    if overview is None and conv_hints.force_document_scoped_routing and is_short_document_deictic_followup(
+                        query
+                    ):
+                        overview = try_build_grounded_document_overview(
+                            "what is this document about?", hits
+                        )
+                    if overview is not None:
+                        fixed, warn = validate_grounded_answer(
+                            overview.answer, hits, unknown_phrase=UNKNOWN_PHRASE
+                        )
+                        ga = GroundedAnswer(
+                            answer=fixed,
+                            sources=chunks_to_source_refs(hits),
+                            validation_warning=warn,
+                        )
             return _finalize_answer(
                 AssistantTurn(
                     mode="grounded",
@@ -759,7 +879,7 @@ def _answer_user_query_impl(
                 **common_diag,
             )
         if web_snippets_list:
-            if user_expects_document_grounding(query):
+            if doc_intent:
                 text, gerr = safe_document_abstain_answer(query)
             else:
                 text, gerr = safe_general_answer(query)
@@ -788,7 +908,7 @@ def _answer_user_query_impl(
             exception_summary=gerr or debug_service.short_exc(exc),
         )
 
-    doc_scope = user_expects_document_grounding(query)
+    doc_scope = doc_intent
     if stream:
         _stream_fn = stream_document_abstain_tokens if doc_scope else stream_general_answer_tokens
 
@@ -833,6 +953,7 @@ def answer_user_query(
     top_k: int,
     task_mode: str = "auto",
     summarize_scope: str = "all",
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> AssistantTurn:
     """
     Route to a general assistant reply when there is no library or retrieval is weak;
@@ -870,6 +991,7 @@ def answer_user_query(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             top_k=top_k,
+            conversation_history=conversation_history,
         )
     except Exception as exc:
         if debug_service.debug_enabled():

@@ -40,6 +40,10 @@ def post_chat(
         raise HTTPException(status_code=400, detail="chunk_overlap must be less than chunk_size")
     prev = os.environ.get("KA_NO_STREAM")
     os.environ["KA_NO_STREAM"] = "1"
+    conv = None
+    if req.conversation:
+        conv = [t.model_dump(exclude_none=True) for t in req.conversation]
+
     try:
         turn = chat_service.answer_user_query(
             req.message.strip(),
@@ -50,6 +54,7 @@ def post_chat(
             top_k=tk,
             task_mode=req.task_mode,
             summarize_scope=req.summarize_scope,
+            conversation_history=conv,
         )
     finally:
         if prev is None:
@@ -91,6 +96,9 @@ def _chat_sse_events(req: ChatRequest, settings: Settings) -> Iterator[str]:
 
     try:
         try:
+            conv = None
+            if req.conversation:
+                conv = [t.model_dump(exclude_none=True) for t in req.conversation]
             turn = chat_service.answer_user_query(
                 req.message.strip(),
                 raw_dir=settings.raw_dir,
@@ -100,6 +108,7 @@ def _chat_sse_events(req: ChatRequest, settings: Settings) -> Iterator[str]:
                 top_k=tk,
                 task_mode=req.task_mode,
                 summarize_scope=req.summarize_scope,
+                conversation_history=conv,
             )
         except Exception as exc:
             yield format_sse(

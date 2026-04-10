@@ -5,6 +5,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class ConversationTurnIn(BaseModel):
+    """Prior turns before the current ``message`` (oldest first). Used for follow-up retrieval."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(default="", max_length=24_000)
+    mode: str | None = None
+    grounded: bool | None = None
+    sources: list[dict[str, Any]] | None = None
+
+
 class ChatRequest(BaseModel):
     message: str
     chunk_size: int | None = None
@@ -12,6 +22,7 @@ class ChatRequest(BaseModel):
     top_k: int | None = None
     task_mode: Literal["auto", "summarize", "extract", "compare"] = "auto"
     summarize_scope: str = "all"
+    conversation: list[ConversationTurnIn] | None = None
 
 
 class SourceRefOut(BaseModel):

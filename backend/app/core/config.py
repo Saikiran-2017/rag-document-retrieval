@@ -30,11 +30,27 @@ def get_cors_allow_origins() -> list[str]:
     raw = os.environ.get("KA_CORS_ORIGINS", "").strip()
     if raw:
         return [o.strip() for o in raw.split(",") if o.strip()]
-    return [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://[::1]:3000",
-    ]
+    # Local dev + E2E: include the configured web port when present (e.g. Playwright on 3100).
+    extra_ports: set[int] = set()
+    for key in ("E2E_WEB_PORT", "KA_WEB_PORT", "PORT_WEB"):
+        v = (os.environ.get(key) or "").strip()
+        if v.isdigit():
+            extra_ports.add(int(v))
+    # Default Next dev port.
+    extra_ports.add(3000)
+    # Common alternate dev ports.
+    extra_ports.add(3100)
+    extra_ports.add(3200)
+    origins: list[str] = []
+    for p in sorted(extra_ports):
+        origins.extend(
+            [
+                f"http://localhost:{p}",
+                f"http://127.0.0.1:{p}",
+                f"http://[::1]:{p}",
+            ]
+        )
+    return origins
 
 
 @lru_cache

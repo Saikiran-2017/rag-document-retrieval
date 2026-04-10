@@ -247,6 +247,12 @@ def rebuild_knowledge_index(
                 retrieval_probe=probe,
             )
             document_manifest.prune_manifest_to_filenames(faiss_folder, set(current_hashes.keys()))
+            # Refresh quick fingerprint on every successful unchanged sync so API chat checks
+            # stay aligned with the current runtime (Docker bind mounts can skew mtime views).
+            if state:
+                st2 = dict(state)
+                st2["files_quick"] = [list(x) for x in library_quick_fingerprint(raw_dir)]
+                index_library_state.save_state(faiss_folder, st2)
             if debug_service.debug_enabled():
                 debug_service.merge(index_sync="incremental_skip_unchanged", index_vector_count=nvec)
             logger.info("Index unchanged (file hashes + settings match); skipped rebuild (%s vectors).", nvec)
@@ -439,6 +445,32 @@ def ensure_index_matches_library(
         if debug_service.debug_enabled():
             debug_service.merge(index_sync="reused_quick")
         return True, ""
+
+    # Content hashes match saved sync state but mtime/size quick fingerprint differs.
+    # Typical with Docker Desktop: Linux container stat() vs Windows host for bind-mounted files.
+    if index_ready and state and _settings_match_saved_state(
+        state,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        embedding_model=DEFAULT_EMBEDDING_MODEL,
+    ):
+        prev_files = state.get("files")
+        if isinstance(prev_files, dict):
+            cur_hashes = dict(library_content_fingerprint(raw_dir))
+            if cur_hashes and prev_files == cur_hashes:
+                if not ok_quick:
+                    st2 = dict(state)
+                    st2["files_quick"] = [list(x) for x in quick]
+                    index_library_state.save_state(faiss_folder, st2)
+                if debug_service.debug_enabled():
+                    debug_service.merge(
+                        index_sync=(
+                            "reused_content_hashes_repaired_quick"
+                            if not ok_quick
+                            else "reused_content_hashes"
+                        ),
+                    )
+                return True, ""
 
     # Optional escape hatch: auto-sync on chat for API usage (not recommended for large libraries).
     auto = os.environ.get("KA_AUTO_SYNC_ON_CHAT", "").strip().lower() in ("1", "true", "yes", "on")

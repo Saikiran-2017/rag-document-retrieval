@@ -13,6 +13,45 @@ from app.persistence import document_manifest
 from app.retrieval.vector_store import RetrievedChunk
 
 
+def promote_alternate_top_for_limited_grounding(
+    faiss_folder: Path,
+    hits: list[RetrievedChunk],
+    *,
+    relaxed_doc_qa: bool,
+    lookup_qa_relaxed: bool,
+    for_document_task: bool = False,
+) -> list[RetrievedChunk]:
+    """
+    When the hybrid reranker puts a weak match first, ``ready_limited`` gating can block
+    grounding even though another trusted chunk (same pool) is strong enough — common in
+    tiny multi-file libraries where one large file dominates fusion mass.
+
+    Try a small number of alternates as synthetic rank-1 before giving up.
+    """
+    if len(hits) < 2:
+        return hits
+    if allow_document_grounding(
+        faiss_folder,
+        hits,
+        for_document_task=for_document_task,
+        relaxed_doc_qa=relaxed_doc_qa,
+        lookup_qa_relaxed=lookup_qa_relaxed,
+    ):
+        return hits
+    lim = min(len(hits), 12)
+    for i in range(1, lim):
+        rotated = [hits[i], *hits[:i], *hits[i + 1 :]]
+        if allow_document_grounding(
+            faiss_folder,
+            rotated,
+            for_document_task=for_document_task,
+            relaxed_doc_qa=relaxed_doc_qa,
+            lookup_qa_relaxed=lookup_qa_relaxed,
+        ):
+            return rotated
+    return hits
+
+
 def filter_trusted_retrieval_hits(
     faiss_folder: Path,
     hits: list[RetrievedChunk],
