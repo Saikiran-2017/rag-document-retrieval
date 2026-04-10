@@ -342,6 +342,15 @@ def run_pending_assistant_turn(
     with st.chat_message("assistant"):
         with st.spinner("Preparing your answer…"):
             try:
+                msgs = list(st.session_state.messages)
+                qstrip = str(pend["q"]).strip()
+                conv_hist = (
+                    msgs[:-1]
+                    if msgs
+                    and str(msgs[-1].get("role") or "") == "user"
+                    and str(msgs[-1].get("content") or "").strip() == qstrip
+                    else msgs
+                )
                 turn = chat_service.answer_user_query(
                     str(pend["q"]),
                     raw_dir=raw_dir,
@@ -351,6 +360,7 @@ def run_pending_assistant_turn(
                     top_k=int(pend.get("tk", tk)),
                     task_mode=str(pend.get("task_mode", task_mode)),
                     summarize_scope=str(pend.get("summarize_scope", summarize_scope)),
+                    conversation_history=conv_hist,
                 )
             except Exception as exc:
                 debug_service.merge(exception_summary=debug_service.short_exc(exc))
