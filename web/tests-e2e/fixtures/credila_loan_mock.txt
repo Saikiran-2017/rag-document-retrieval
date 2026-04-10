@@ -1,0 +1,11 @@
+Credila's Student Loan Intranet System
+
+Process Loan - Loan Details
+Applicant Name: SAI KIRAN
+Application Number: ABCD-12345
+Loan Disbursed Amount 1,026,904.00
+Repayment Schedule: Monthly
+Interest Certificate: Available
+Rate of Interest: 9.25%
+Loan Disbursed Date: 2025-01-15
+

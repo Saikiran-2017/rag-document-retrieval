@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   appendMessage,
   buildAssistantExtra,
+  buildConversationPayload,
   checkApiHealth,
   createChat,
   deleteChat,
@@ -32,6 +33,14 @@ const SKELETON_DELAY_MS = 220;
 
 function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function serverTimingMsLabel(diagnostics: unknown): string | null {
+  if (!diagnostics || typeof diagnostics !== "object") return null;
+  const v = (diagnostics as { timing_ms_total?: unknown }).timing_ms_total;
+  if (typeof v === "number" && Number.isFinite(v)) return String(Math.round(v));
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return null;
 }
 
 function answerToMeta(ans: ChatAnswer) {
@@ -244,19 +253,15 @@ export function ChatApp() {
       const t0 = performance.now();
       const data = await uploadFiles(files);
       const dt = performance.now() - t0;
-      const extra =
-        data?.diagnostics && typeof data.diagnostics === "object" && "timing_ms_total" in data.diagnostics
-          ? ` (server ${String((data.diagnostics as any).timing_ms_total)} ms)`
-          : ` (client ${Math.round(dt)} ms)`;
+      const st = serverTimingMsLabel(data?.diagnostics);
+      const extra = st != null ? ` (server ${st} ms)` : ` (client ${Math.round(dt)} ms)`;
       setUploadHint((data.message ?? "Upload finished. Syncing your library…") + extra);
       await refreshDocuments();
       const t1 = performance.now();
       const res = await syncLibrary();
       const dt2 = performance.now() - t1;
-      const extra2 =
-        res?.diagnostics && typeof res.diagnostics === "object" && "timing_ms_total" in res.diagnostics
-          ? ` (server ${String((res.diagnostics as any).timing_ms_total)} ms)`
-          : ` (client ${Math.round(dt2)} ms)`;
+      const st2 = serverTimingMsLabel(res?.diagnostics);
+      const extra2 = st2 != null ? ` (server ${st2} ms)` : ` (client ${Math.round(dt2)} ms)`;
       setSyncHint(res.message + extra2);
       await refreshDocuments();
     } catch (e) {
@@ -274,10 +279,8 @@ export function ChatApp() {
       const t0 = performance.now();
       const res = await syncLibrary();
       const dt = performance.now() - t0;
-      const extra =
-        res?.diagnostics && typeof res.diagnostics === "object" && "timing_ms_total" in res.diagnostics
-          ? ` (server ${String((res.diagnostics as any).timing_ms_total)} ms)`
-          : ` (client ${Math.round(dt)} ms)`;
+      const st = serverTimingMsLabel(res?.diagnostics);
+      const extra = st != null ? ` (server ${st} ms)` : ` (client ${Math.round(dt)} ms)`;
       setSyncHint(res.message + extra);
       await refreshDocuments();
     } catch (e) {
@@ -311,6 +314,7 @@ export function ChatApp() {
     const wasEmpty = messages.length === 0;
 
     const userMsg: UiMessage = { id: newId(), role: "user", content: q };
+    const conversationPayload = buildConversationPayload(messages);
     setMessages((prev) => [...prev, userMsg]);
 
     try {
@@ -397,7 +401,7 @@ export function ChatApp() {
         setStreaming(false);
         abortRef.current = null;
       },
-    });
+    }, conversationPayload);
 
     if (outcome === "incomplete") {
       setStreaming(false);

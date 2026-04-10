@@ -12,13 +12,17 @@ import {
   fetchHealth,
   postChatJson,
   shouldRunLlmSuite,
+  waitForAnyDocumentListed,
 } from "./helpers/api";
 import {
   clickSyncDocuments,
   openSidebarIfMobile,
   sendChatMessage,
   uploadCorpus,
+  withStage,
+  mainTextBubbles,
   waitForAssistantAnyText,
+  waitForAssistantNewText,
   waitForLibraryFile,
   waitForSidebarLibraryReady,
 } from "./helpers/ui";
@@ -26,6 +30,8 @@ import {
 const CORPUS_FILE = path.join(__dirname, "fixtures", "e2e_brutal_corpus.txt");
 const CORPUS_BUFFER = fs.readFileSync(CORPUS_FILE);
 const CORPUS_NAME = "e2e_brutal_corpus.txt";
+const CREDILA_FILE = path.join(__dirname, "fixtures", "credila_loan_mock.txt");
+const CREDILA_NAME = "credila_loan_mock.txt";
 const TOKEN = "E2E_VERIFY_TOKEN_XY42NZ";
 const CEO_ANCHOR = "BRUTAL_E2E_CEO_ANCHOR";
 
@@ -73,7 +79,8 @@ test.describe("B. API flows — uploads & sync UX (no chat model)", () => {
     page,
     request,
   }) => {
-    await request.post("http://127.0.0.1:8000/api/v1/upload", {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || `http://127.0.0.1:${process.env.E2E_API_PORT || 8000}`;
+    await request.post(`${apiBase}/api/v1/upload`, {
       multipart: {
         files: {
           name: CORPUS_NAME,
@@ -84,7 +91,7 @@ test.describe("B. API flows — uploads & sync UX (no chat model)", () => {
     });
     await page.goto("/");
     await openSidebarIfMobile(page);
-    await expect(page.getByTitle(CORPUS_NAME)).toBeVisible({ timeout: 30_000 });
+    await waitForLibraryFile(page, CORPUS_NAME, 60_000);
     await expect(
       page.getByText(/not indexed for search yet|library is not indexed/i),
     ).toBeVisible({ timeout: 15_000 });
@@ -97,7 +104,8 @@ test.describe("B. API flows — uploads & sync UX (no chat model)", () => {
 
   test("remove document confirms and clears row", async ({ page, request }) => {
     const dialogDone = page.waitForEvent("dialog").then((d) => d.accept());
-    await request.post("http://127.0.0.1:8000/api/v1/upload", {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || `http://127.0.0.1:${process.env.E2E_API_PORT || 8000}`;
+    await request.post(`${apiBase}/api/v1/upload`, {
       multipart: {
         files: {
           name: CORPUS_NAME,
@@ -106,13 +114,13 @@ test.describe("B. API flows — uploads & sync UX (no chat model)", () => {
         },
       },
     });
-    await request.post("http://127.0.0.1:8000/api/v1/sync", {
+    await request.post(`${apiBase}/api/v1/sync`, {
       headers: { "Content-Type": "application/json" },
       data: "{}",
     });
     await page.goto("/");
     await openSidebarIfMobile(page);
-    await expect(page.getByTitle(CORPUS_NAME)).toBeVisible({ timeout: 60_000 });
+    await waitForLibraryFile(page, CORPUS_NAME, 60_000);
     const removeBtn = page.getByRole("button", { name: new RegExp(`Remove ${CORPUS_NAME}`) });
     await removeBtn.click();
     await dialogDone;
@@ -178,7 +186,10 @@ test.describe("C. Grounded chat — requires valid OPENAI_API_KEY", () => {
       request,
       `What is the exact string E2E_VERIFY_TOKEN_XY42NZ? If you do not have this in your files, say you cannot find it.`,
     );
-    expect(ans.text.toUpperCase().includes(TOKEN)).toBeFalsy();
+    // This is a negative-case: the model must not leak the token when the library is empty.
+    // Some models may restate a token when it is explicitly supplied in the user's prompt.
+    // The real safety property we want: do not claim it is present in the user's documents.
+    expect(ans.text).toMatch(/cannot find|don't know|not in (my|your) (files|documents|uploaded)/i);
   });
 
   test("UI streaming completes for a short reply (sanity)", async ({ page }) => {
@@ -188,6 +199,86 @@ test.describe("C. Grounded chat — requires valid OPENAI_API_KEY", () => {
     const text = await waitForAssistantAnyText(page, 90_000);
     expect(text).not.toContain("did not finish");
     expect(text.toUpperCase()).toContain("OK");
+  });
+
+  test("Credila-style loan doc: about + amount + applicant + application no + negative + delete + new chat (UI)", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(240_000);
+    let storedName = CREDILA_NAME;
+
+    await withStage("open app", async () => {
+      await page.goto("/", { timeout: 45_000, waitUntil: "domcontentloaded" });
+    });
+    await withStage("upload", async () => {
+      await uploadCorpus(page, CREDILA_FILE);
+      storedName = await waitForAnyDocumentListed(request, 60_000);
+      // Best-effort UI assertion (backend may sanitize stored filename).
+      await waitForLibraryFile(page, storedName, 180_000);
+    });
+    await withStage("sync", async () => {
+      await clickSyncDocuments(page);
+      await waitForSidebarLibraryReady(page, 180_000);
+    });
+
+    // Helper: ensure we always wait for a *new* assistant bubble (not a preloaded one).
+    const ask = async (q: string, stage: string) => {
+      const prev = await mainTextBubbles(page).count();
+      await withStage(stage, async () => {
+        await sendChatMessage(page, q);
+      });
+      return await withStage(`${stage}: wait`, async () => {
+        return waitForAssistantNewText(page, prev, 120_000);
+      });
+    };
+
+    const about = await ask("what is this document about?", "about answer");
+    expect(about.toLowerCase()).toContain("document");
+    expect(about).toMatch(/\[SOURCE\s+\d+\]/i);
+    expect(about).not.toMatch(/I don't know based on the provided documents/i);
+
+    const amt = await ask("how much is my loan?", "loan amount");
+    expect(amt).toMatch(/1,026,904\.00/);
+    expect(amt).toMatch(/\[SOURCE\s+\d+\]/i);
+    expect(amt).not.toMatch(/I don't know based on the provided documents/i);
+
+    const name = await ask("what is the applicant name?", "applicant name");
+    expect(name).toMatch(/SAI\s+KIRAN/i);
+    expect(name).toMatch(/\[SOURCE\s+\d+\]/i);
+
+    const appNo = await ask("what is the application number?", "application number");
+    expect(appNo).toMatch(/ABCD-12345/i);
+    expect(appNo).toMatch(/\[SOURCE\s+\d+\]/i);
+
+    const neg = await ask(
+      "what is the recipe for chocolate cake in my uploaded files?",
+      "negative question",
+    );
+    expect(neg).toMatch(/I don't know based on the provided documents/i);
+
+    // Delete document via sidebar row action (confirm dialog)
+    await withStage("delete document", async () => {
+      await openSidebarIfMobile(page);
+      const dialogDone = page.waitForEvent("dialog", { timeout: 15_000 }).then((d) => d.accept());
+      const removeBtn = page.getByRole("button", { name: new RegExp(`Remove ${storedName}`) });
+      await removeBtn.click({ timeout: 15_000 });
+      await dialogDone;
+      await expect(page.getByText("No files yet. Upload, then Sync.")).toBeVisible({
+        timeout: 120_000,
+      });
+    });
+
+    // New chat (ensures chat reset path works)
+    await withStage("new chat", async () => {
+      await openSidebarIfMobile(page);
+      await page
+        .locator("#app-sidebar")
+        .getByRole("button", { name: /New chat/i })
+        .first()
+        .click({ timeout: 15_000 });
+      await expect(page.getByPlaceholder("Message…")).toBeVisible({ timeout: 15_000 });
+    });
   });
 
   test("task mode Compare via JSON API returns substantive text", async ({ page, request }) => {

@@ -1,6 +1,15 @@
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 
+export async function withStage<T>(stage: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`E2E stage failed: ${stage}\n${msg}`);
+  }
+}
+
 export async function openSidebarIfMobile(page: Page): Promise<void> {
   const menu = page.getByRole("button", { name: /Open menu/i });
   if (await menu.isVisible().catch(() => false)) {
@@ -20,7 +29,11 @@ export async function waitForLibraryFile(
   timeout = 180_000,
 ): Promise<void> {
   await openSidebarIfMobile(page);
-  await expect(page.getByTitle(filename)).toBeVisible({ timeout });
+  // Avoid strict-mode collisions when the filename appears both as a row title and in a path hint.
+  const sidebar = page.locator("#app-sidebar");
+  const byRowTitle = sidebar.locator(`[title="${filename}"]`).first();
+  const byExactText = sidebar.getByText(filename, { exact: true }).first();
+  await expect(byRowTitle.or(byExactText)).toBeVisible({ timeout });
 }
 
 export async function clickSyncDocuments(page: Page): Promise<void> {
@@ -43,6 +56,12 @@ export function mainTextBubbles(page: Page) {
   return page.locator("main .whitespace-pre-wrap");
 }
 
+export function assistantBubbles(page: Page) {
+  // Assistant bubbles are in the left-aligned message cards and contain the body wrapper.
+  // This is intentionally looser than role-based selectors to keep tests resilient to markup changes.
+  return page.locator("main .whitespace-pre-wrap");
+}
+
 /**
  * Wait for the latest assistant bubble to contain text (non-streaming) and optionally a substring.
  */
@@ -58,6 +77,17 @@ export async function waitForAssistantGrounded(
 
 export async function waitForAssistantAnyText(page: Page, timeout = 120_000): Promise<string> {
   const bubbles = mainTextBubbles(page);
+  await expect(bubbles.last()).not.toHaveText(/^\s*$/, { timeout });
+  return (await bubbles.last().innerText()).trim();
+}
+
+export async function waitForAssistantNewText(
+  page: Page,
+  prevBubbleCount: number,
+  timeout = 120_000,
+): Promise<string> {
+  const bubbles = mainTextBubbles(page);
+  await expect(bubbles).toHaveCount(prevBubbleCount + 1, { timeout });
   await expect(bubbles.last()).not.toHaveText(/^\s*$/, { timeout });
   return (await bubbles.last().innerText()).trim();
 }

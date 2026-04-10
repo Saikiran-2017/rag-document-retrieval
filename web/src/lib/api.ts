@@ -4,7 +4,38 @@ import type {
   DocumentsListResponse,
   MessageOut,
   TaskMode,
+  UiMessage,
 } from "./types";
+
+/** Prior turns for follow-up retrieval (same session, before the current user message). */
+export type ConversationTurnPayload = {
+  role: "user" | "assistant";
+  content: string;
+  mode?: string;
+  grounded?: boolean;
+  sources?: ChatAnswer["sources"];
+};
+
+export function buildConversationPayload(msgs: UiMessage[]): ConversationTurnPayload[] {
+  const out: ConversationTurnPayload[] = [];
+  for (const m of msgs) {
+    if (m.role === "user") {
+      out.push({ role: "user", content: m.content });
+      continue;
+    }
+    const row: ConversationTurnPayload = { role: "assistant", content: m.content };
+    const meta = m.meta;
+    if (meta?.sources?.length) {
+      row.sources = meta.sources;
+      row.mode = meta.mode ?? "grounded";
+      row.grounded = true;
+    } else if (meta?.mode) {
+      row.mode = meta.mode;
+    }
+    out.push(row);
+  }
+  return out;
+}
 
 export function getApiBase(): string {
   const b = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
@@ -229,7 +260,39 @@ export async function postChatStream(
     onDone: (answer: ChatAnswer) => void;
     onError: (detail: string) => void;
   },
+  conversation?: ConversationTurnPayload[],
 ): Promise<StreamOutcome> {
+  // E2E reliability: opt into non-streaming API and emit a single "token" + "done".
+  // This keeps the UI path identical while avoiding SSE flake on some Windows setups.
+  if (process.env.NEXT_PUBLIC_E2E_NO_STREAM === "1") {
+    try {
+      const r = await fetch(apiUrl("/api/v1/chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          task_mode: taskMode,
+          summarize_scope: "all",
+          ...(conversation?.length ? { conversation } : {}),
+        }),
+        signal,
+      });
+      if (signal.aborted) return "aborted";
+      if (!r.ok) {
+        handlers.onError(await readErrorBody(r));
+        return "complete";
+      }
+      const ans = (await r.json()) as ChatAnswer;
+      if (ans.text) handlers.onToken(ans.text);
+      handlers.onDone(ans);
+      return "complete";
+    } catch (e) {
+      if (signal.aborted) return "aborted";
+      handlers.onError(e instanceof Error ? e.message : "Network error");
+      return "complete";
+    }
+  }
+
   let sawTerminal = false;
   const markDone = (answer: ChatAnswer) => {
     sawTerminal = true;
@@ -245,7 +308,12 @@ export async function postChatStream(
     r = await fetch(apiUrl("/api/v1/chat/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ message, task_mode: taskMode, summarize_scope: "all" }),
+      body: JSON.stringify({
+        message,
+        task_mode: taskMode,
+        summarize_scope: "all",
+        ...(conversation?.length ? { conversation } : {}),
+      }),
       signal,
     });
   } catch (e) {

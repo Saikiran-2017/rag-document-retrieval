@@ -1,6 +1,7 @@
 import type { APIRequestContext } from "@playwright/test";
 
-const API_BASE = "http://127.0.0.1:8000";
+const apiPort = Number(process.env.E2E_API_PORT || 8000);
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || `http://127.0.0.1:${apiPort}`;
 
 export type HealthPayload = {
   status?: string;
@@ -33,6 +34,47 @@ export async function clearE2ELibrary(request: APIRequestContext): Promise<void>
   }
 }
 
+export async function waitForDocumentListed(
+  request: APIRequestContext,
+  filename: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const t0 = Date.now();
+  // Poll the API list to fail fast with a clear message if UI refresh is flaky.
+  for (;;) {
+    const r = await request.get(`${API_BASE}/api/v1/documents`);
+    if (r.ok()) {
+      const data = (await r.json()) as { documents?: { filename: string }[] };
+      const names = (data.documents ?? []).map((d) => d.filename);
+      if (names.includes(filename)) return;
+    }
+    if (Date.now() - t0 > timeoutMs) {
+      throw new Error(`Timed out waiting for documents API to list ${filename}`);
+    }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+export async function waitForAnyDocumentListed(
+  request: APIRequestContext,
+  timeoutMs = 60_000,
+): Promise<string> {
+  const t0 = Date.now();
+  for (;;) {
+    const r = await request.get(`${API_BASE}/api/v1/documents`);
+    if (r.ok()) {
+      const data = (await r.json()) as { documents?: { filename: string }[] };
+      const docs = data.documents ?? [];
+      const name = docs[0]?.filename;
+      if (name) return name;
+    }
+    if (Date.now() - t0 > timeoutMs) {
+      throw new Error("Timed out waiting for documents API to list any uploaded file");
+    }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
 export function shouldRunLlmSuite(health: HealthPayload | null): boolean {
   if (!health || health.status !== "ok") return false;
   if (!health.openai_key_configured) return false;
@@ -57,5 +99,5 @@ export async function postChatJson(
   if (!r.ok()) {
     throw new Error(`POST /chat failed: ${r.status()} ${await r.text()}`);
   }
-  return r.json() as { text: string; mode: string; sources?: unknown[] };
+  return (await r.json()) as { text: string; mode: string; sources?: unknown[] };
 }
