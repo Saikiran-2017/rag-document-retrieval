@@ -27,6 +27,7 @@ _DOCUMENT_SCOPE = re.compile(
     r"describe\s+(this|the)\s+(document|file)|"
     r"performance|latency|latencies|throughput|benchmark|metric|metrics|"
     r"sla\b|requirements?|p99|discussed|discussion|plain language"
+    r"|loan|loans|applicant|application\s+number|disbursed\s+amount|repayment\s+schedule|interest\s+certificate|rate\s+of\s+interest"
     r")\b",
     re.I,
 )
@@ -115,6 +116,7 @@ _ENTITY_LOOKUP_SAFE = re.compile(
     r"ticket\b|case\b|issue\b|incident\b|"
     r"identifier\b|id\b|uuid\b|"
     r"serial\b|tracking\b|reference\b|ref\b"
+    r"|applicant\b|application\s+number\b|disbursed\s+amount\b|loan\s+amount\b"
     r")\b",
     re.I,
 )
@@ -138,7 +140,12 @@ def is_sparse_entity_lookup_query(query: str) -> bool:
     ql = q.lower()
     # Fast shape heuristic: short WH- questions or "name/id/date" asks.
     wh = bool(re.match(r"^\s*(who|what|when)\b", ql))
-    ask = bool(re.search(r"\b(name|named|id|identifier|uuid|date|owner|lead|manager|contact)\b", ql))
+    ask = bool(
+        re.search(
+            r"\b(name|named|id|identifier|uuid|date|owner|lead|manager|contact|applicant|application|loan|disbursed)\b",
+            ql,
+        )
+    )
     if not (wh or ask):
         return False
     return bool(_ENTITY_LOOKUP_SAFE.search(q))

@@ -56,7 +56,13 @@ _HYBRID_LOOKUP_MAX_L2_WHEN_HIGH_RRF = 1.45
 
 UNKNOWN_PHRASE = "I don't know based on the provided documents."
 
-GENERAL_ASSISTANT_PROMPT = """You are the assistant in a chat app. Reply in a clear, friendly tone.
+GENERAL_ASSISTANT_PROMPT = """You are the assistant in a document Q&A and knowledge-workspace chat app. Reply in a clear, friendly tone.
+
+Domain vocabulary (when the user asks about these terms in this app, prefer the information-retrieval / ML meaning):
+- **RAG** means **Retrieval-Augmented Generation**: combining search/retrieval over a knowledge source with a language model so answers can be grounded in that material.
+- **Retrieval-augmented generation** is the same idea as RAG (full phrase).
+- **Embeddings** are numeric vector representations of text used for semantic search and similarity.
+- **Vector database** (vector store) indexes those vectors to find nearest neighbors for retrieval.
 
 How to write:
 - Answer the user's message directly. Prefer short paragraphs; use a short bullet list only when it improves clarity (steps, options, or multiple items).
@@ -632,7 +638,12 @@ def hybrid_hit_strong_for_limited_corpora(
         return d <= _LIMITED_TASK_MAX_L2 and rrf >= _LIMITED_TASK_MIN_RRF
     if for_broad_qa:
         if rrf > 0:
-            return d <= _LIMITED_BROAD_QA_MAX_L2 and rrf >= _LIMITED_BROAD_QA_MIN_RRF
+            if d <= _LIMITED_BROAD_QA_MAX_L2 and rrf >= _LIMITED_BROAD_QA_MIN_RRF:
+                return True
+            # Match hybrid_retrieval_is_useful broad band: strong RRF can justify a looser L2 cap.
+            if rrf >= _HYBRID_BROAD_QA_HIGH_RRF:
+                return d <= _HYBRID_BROAD_QA_MAX_L2_WHEN_HIGH_RRF and rrf >= _LIMITED_BROAD_QA_MIN_RRF
+            return False
         return d <= USEFUL_RETRIEVAL_MAX_L2
     if for_lookup_qa:
         if rrf > 0:
