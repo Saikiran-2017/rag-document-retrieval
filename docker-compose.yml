@@ -1,8 +1,9 @@
-# Local / demo full stack: API + Next.js. Copy .env.example → .env and set OPENAI_API_KEY.
+# Local / demo full stack: API + Next.js. Copy .env.example → `.env` and set OPENAI_API_KEY.
+# Optional `.env.local` (gitignored) is merged when present so keys match local Python/Next dev.
 #
 #   docker compose up --build
 #
-# UI: http://localhost:3000  |  API: http://localhost:8000  |  Health: http://localhost:8000/health
+# UI: http://localhost:3001  |  API: http://localhost:8000  |  Health: http://localhost:8000/health
 #
 # Browser calls the API via NEXT_PUBLIC_API_URL (must match how you open the site).
 
@@ -13,8 +14,12 @@ services:
       - "8000:8000"
     env_file:
       - .env
+      - path: .env.local
+        required: false
     environment:
       KA_ENV: production
+      # Ensure CORS allows the mapped web port (3001->3000).
+      KA_WEB_PORT: "3001"
       PYTHONPATH: /app
     volumes:
       - ./data:/app/data
@@ -31,8 +36,9 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_E2E_NO_STREAM: "1"
     ports:
-      - "3000:3000"
+      - "3001:3000"
     depends_on:
       api:
         condition: service_healthy

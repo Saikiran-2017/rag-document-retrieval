@@ -1,3 +1,0 @@
-Phase 2 ingestion sample
-
-This file tests the TXT loader. RAG pipelines need clean text and metadata before chunking.

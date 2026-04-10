@@ -75,12 +75,32 @@ Details, gate rationale, and file pointers: **[docs/ARCHITECTURE.md](docs/ARCHIT
 
 ## Screenshots
 
-Add PNGs under **`docs/images/`** and embed them in this README (see **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)** for a full checklist).
+Add PNGs under **`docs/images/`** (see **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)** for a full checklist). Use the filenames below so the embeds resolve on GitHub once the files exist.
 
-| Surface | Ideas |
-|---------|--------|
-| **Streamlit** | Hero, sidebar library + sync, grounded answer + sources/excerpts. |
-| **Next.js** | Empty hero, streaming + mode badge, sources with snippets, mobile drawer. |
+| # | Suggested filename | What to capture |
+|---|--------------------|-----------------|
+| 1 | `nextjs-01-library-ready.png` | Next.js sidebar: **Files in library** + **Ready** (or Ready · limited) after **Sync**. |
+| 2 | `nextjs-02-chat-grounded-citations.png` | Main pane: grounded answer with **`[SOURCE n]`** and readable body text. |
+| 3 | `nextjs-03-sources-panel.png` | Same turn: source list / snippets (if visible in your layout). |
+| 4 | `streamlit-01-grounded-sources.png` | Streamlit: grounded reply + **sources / excerpts** expanders. |
+| 5 | `streamlit-02-library-sync.png` | Streamlit: library path + **Sync** / index status. |
+
+**Embeds** (images appear after you drop the matching files into `docs/images/`):
+
+<p align="center">
+  <img src="docs/images/nextjs-01-library-ready.png" alt="Next.js sidebar: library listed and Ready after sync" width="780" />
+  <br /><em>Next.js — library + readiness</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/nextjs-02-chat-grounded-citations.png" alt="Next.js chat: grounded answer with SOURCE citations" width="780" />
+  <br /><em>Next.js — grounded answer with [SOURCE n]</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/streamlit-01-grounded-sources.png" alt="Streamlit: grounded answer with sources" width="780" />
+  <br /><em>Streamlit — grounded answer + sources</em>
+</p>
 
 ---
 
@@ -145,7 +165,7 @@ npm run dev
 docker compose up --build
 ```
 
-See **[DEPLOYMENT.md](DEPLOYMENT.md)** for hosted options. UI `:3000`, API `:8000`, `./data` volume.
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for hosted options. Default compose maps **web → `http://localhost:3001`** (container port 3000), **API → `http://localhost:8000`**, with **`./data`** mounted for uploads and indexes. Set a real **`OPENAI_API_KEY`** (e.g. via `.env` / optional `.env.local` per `docker-compose.yml`).
 
 ### Environment variables
 
@@ -153,18 +173,29 @@ Summarized in **`.env.example`** (root) and **`web/.env.example`**. Highlights: 
 
 ---
 
-## Release validation (modest smoke)
+## Validation proof (portfolio / demo)
 
-With a **real** `OPENAI_API_KEY` (typically **`.env.local`**) and network access, these scripts were used for recent release readiness. Your machine must still satisfy dependencies and billing.
+This repo is set up so you can **re-run** checks before demos or interviews; results depend on your machine, **OpenAI** access, and a **non-placeholder** `OPENAI_API_KEY` where noted.
+
+**Recently green (core product path):**
+
+| Layer | Command / method | Outcome observed |
+|-------|------------------|------------------|
+| Unit / integration | `python -m pytest tests` | **All tests passed** (suite under `tests/`). |
+| Gold document QA eval | `python scripts/run_document_qa_eval.py` | **8/8** cases; aggregate pass rate **1.0** (routing / anchors / refusals). |
+| Brutal product check | `python scripts/brutal_product_check.py` | **PASS** — isolated sync + two grounded chat probes. |
+| Transcript product gate | `python scripts/transcript_product_gate.py` | **PASS** — strict multi-turn transcript replay (isolated temp corpus). |
+| Docker API (HTTP replay) | In API container: `python /app/scripts/deployment_like_replay_gate.py --base-url http://127.0.0.1:8000` | **PASS** — end-to-end HTTP chat replay against the running API. |
+| Docker web (UI smoke) | Playwright: `web/playwright.docker.config.ts` + `tests-e2e/docker-web-smoke.spec.ts` vs `http://localhost:3001` | **PASS** — UI upload → sync → grounded Q&A + **citations** + negative case. |
+
+**Still useful for local sanity (optional):**
 
 | Step | Command | What “good” looks like |
 |------|---------|-------------------------|
-| Env verify | `python scripts/verify_openai_env.py` | Exit **0**; `ready_for_local_dev: true`; `inferred_value_source` often **`.env.local`** for local dev |
+| Env verify | `python scripts/verify_openai_env.py` | Exit **0**; `ready_for_local_dev: true`; key source masked |
 | Real-doc pack | `python scripts/phase28_real_docs_pack.py` | Sync **`ok=True`**, **`vector_count` > 0**, grounded chat probes |
-| Gold eval | `python scripts/run_document_qa_eval.py --json-report eval/_report_local.json` | **8/8** cases in the aggregate (exit **0** when all pass) |
-| Brutal product | `python scripts/brutal_product_check.py` | Exit **0** after temp sync + two grounded queries |
 
-**No API key:** `pytest` runs without OpenAI and should stay green. Eval JSON and phase workdirs are **gitignored** (see `.gitignore`).
+**No API key:** `pytest` runs without OpenAI and should stay green. Eval JSON and scratch workdirs are **gitignored** (see `.gitignore`).
 
 ---
 
