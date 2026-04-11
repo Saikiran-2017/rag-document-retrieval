@@ -533,6 +533,7 @@ def render_assistant_message(msg: dict[str, Any]) -> None:
 
 def render_sidebar_chats() -> None:
     """GPT-style chat list + switcher."""
+    st.markdown('<div class="ka-side-divider" aria-hidden="true"></div>', unsafe_allow_html=True)
     st.markdown('<p class="ka-side-h">Chats</p>', unsafe_allow_html=True)
     cur = st.session_state.active_chat_id
     row = chat_store.get_session(cur)
@@ -595,18 +596,19 @@ def render_sidebar_documents_and_actions(
     faiss_folder: Path,
 ) -> None:
     """Upload, library list, preferences (before sync so values apply), sync, new chat, positioning, debug."""
-    st.markdown('<p class="ka-side-h">Documents</p>', unsafe_allow_html=True)
+    st.markdown('<p class="ka-side-h">Upload</p>', unsafe_allow_html=True)
+    st.caption("PDF, Word, or plain text — attach here, then Sync or send a message.")
     rid = int(st.session_state.get("composer_reset", 0))
     st.file_uploader(
-        "Upload documents",
+        "Add files",
         type=["pdf", "docx", "txt"],
         accept_multiple_files=True,
         key=f"{_COMPOSER_KEY_PREFIX}{rid}",
         label_visibility="visible",
-        help="PDF, Word, or text. Sends with your next message, or tap Sync.",
+        help="Files are saved to your local library folder. Sync builds the search index.",
     )
 
-    st.markdown('<p class="ka-side-h">Your library</p>', unsafe_allow_html=True)
+    st.markdown('<p class="ka-side-h">Library</p>', unsafe_allow_html=True)
     files_now = index_service.list_raw_files(raw_dir)
     lib_manifest = document_manifest.load_manifest(faiss_folder)
     files_meta = lib_manifest.get("files") or {}
@@ -715,7 +717,7 @@ def render_sidebar_documents_and_actions(
             )
 
     cs, co, _tk_read = read_settings()
-    if st.button("Sync documents", use_container_width=True, type="secondary"):
+    if st.button("Sync library", use_container_width=True, type="primary"):
         sync_documents_manual(
             raw_dir,
             faiss_folder,
@@ -733,9 +735,10 @@ def render_sidebar_documents_and_actions(
 # set_page_config must run before any other Streamlit command (including session_state).
 st.set_page_config(
     page_title=APP_NAME,
-    page_icon="💬",
+    page_icon="✦",
     layout="wide",
     initial_sidebar_state="expanded",
+    menu_items={"Get help": None, "Report a bug": None, "About": None},
 )
 
 init_session()
@@ -748,32 +751,59 @@ faiss_folder = get_default_faiss_folder()
 st.markdown(
     """
     <style>
+    @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
     :root {
-      --ka-text: rgba(15, 23, 42, 0.93);
-      --ka-muted: rgba(15, 23, 42, 0.52);
-      --ka-line: rgba(15, 23, 42, 0.09);
-      --ka-sidebar: rgba(248, 250, 252, 0.97);
-      --ka-surface: rgba(255, 255, 255, 0.72);
-      --ka-chat-user: rgba(241, 245, 249, 0.85);
-      --ka-chat-asst: rgba(255, 255, 255, 0.9);
-      --ka-accent: rgba(59, 130, 246, 0.35);
+      --ka-text: rgba(15, 23, 42, 0.94);
+      --ka-muted: rgba(15, 23, 42, 0.5);
+      --ka-line: rgba(15, 23, 42, 0.085);
+      --ka-sidebar: rgba(252, 252, 253, 0.98);
+      --ka-surface: rgba(255, 255, 255, 0.82);
+      --ka-chat-user: rgba(239, 246, 255, 0.92);
+      --ka-chat-asst: rgba(255, 255, 255, 0.96);
+      --ka-accent: rgba(37, 99, 235, 0.42);
+      --ka-app-bg-top: #f8fafc;
+      --ka-app-bg-mid: #f1f5f9;
+      --ka-app-bg-bot: #eceff3;
     }
     @media (prefers-color-scheme: dark) {
       :root {
         --ka-text: rgba(248, 250, 252, 0.94);
         --ka-muted: rgba(248, 250, 252, 0.52);
         --ka-line: rgba(255, 255, 255, 0.1);
-        --ka-sidebar: rgba(15, 23, 42, 0.98);
-        --ka-surface: rgba(30, 41, 59, 0.55);
-        --ka-chat-user: rgba(30, 41, 59, 0.75);
-        --ka-chat-asst: rgba(15, 23, 42, 0.55);
-        --ka-accent: rgba(96, 165, 250, 0.45);
+        --ka-sidebar: rgba(15, 23, 42, 0.99);
+        --ka-surface: rgba(30, 41, 59, 0.58);
+        --ka-chat-user: rgba(30, 58, 95, 0.55);
+        --ka-chat-asst: rgba(15, 23, 42, 0.62);
+        --ka-accent: rgba(96, 165, 250, 0.5);
+        --ka-app-bg-top: #0f172a;
+        --ka-app-bg-mid: #111827;
+        --ka-app-bg-bot: #0b1220;
       }
     }
+    .stApp {
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      background: linear-gradient(
+        168deg,
+        var(--ka-app-bg-top) 0%,
+        var(--ka-app-bg-mid) 38%,
+        var(--ka-app-bg-bot) 100%
+      ) !important;
+      color: var(--ka-text);
+    }
+    #MainMenu { visibility: hidden; }
+    footer[data-testid="stFooter"] { display: none !important; }
+    header[data-testid="stHeader"] {
+      background: transparent !important;
+      backdrop-filter: none !important;
+      border-bottom: none !important;
+    }
+    [data-testid="stDecoration"] { display: none !important; }
     .main .block-container {
-      padding-top: 1.35rem !important;
-      padding-bottom: 2.25rem !important;
-      max-width: 44rem !important;
+      padding-top: 1rem !important;
+      padding-bottom: 1.5rem !important;
+      max-width: 52rem !important;
       margin-left: auto !important;
       margin-right: auto !important;
     }
@@ -794,22 +824,28 @@ st.markdown(
       opacity: 0.85;
     }
     div[data-testid="stChatInput"] {
-      padding-bottom: 0.85rem;
-      padding-top: 0.65rem;
+      padding-bottom: 1rem;
+      padding-top: 0.75rem;
       border-top: 1px solid var(--ka-line);
-      margin-top: 0.5rem;
+      margin-top: 0.35rem;
+      background: linear-gradient(180deg, transparent 0%, var(--ka-app-bg-bot) 35%);
+    }
+    div[data-testid="stChatInput"] textarea {
+      font-size: 0.97rem !important;
+      line-height: 1.5 !important;
     }
     [data-testid="stChatMessage"] {
-      padding: 0.65rem 0.85rem 0.75rem 0.85rem !important;
-      margin-bottom: 1.5rem !important;
-      border-radius: 0.85rem;
+      padding: 0.75rem 1rem 0.85rem 1rem !important;
+      margin-bottom: 1.35rem !important;
+      border-radius: 1rem;
       border: 1px solid var(--ka-line);
       background: var(--ka-chat-asst);
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      box-shadow: 0 2px 14px rgba(15, 23, 42, 0.055);
     }
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
       background: var(--ka-chat-user);
       border-left: 3px solid var(--ka-accent);
+      box-shadow: 0 2px 12px rgba(37, 99, 235, 0.07);
     }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p,
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] li {
@@ -954,18 +990,18 @@ st.markdown(
       font-size: 0.89rem !important;
     }
     .ka-brand-title {
-      font-weight: 600;
-      font-size: 1.14rem;
-      letter-spacing: -0.032em;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: -0.04em;
       color: var(--ka-text);
-      margin: 0 0 0.25rem 0;
-      line-height: 1.22;
+      margin: 0 0 0.35rem 0;
+      line-height: 1.2;
     }
     .ka-brand-sub {
-      font-size: 0.79rem;
-      line-height: 1.48;
+      font-size: 0.78rem;
+      line-height: 1.52;
       color: var(--ka-muted);
-      margin: 0 0 1rem 0;
+      margin: 0 0 1.15rem 0;
     }
     .ka-side-h {
       font-size: 0.64rem;
@@ -974,6 +1010,12 @@ st.markdown(
       text-transform: uppercase;
       color: var(--ka-muted);
       margin: 0.35rem 0 0.42rem 0;
+    }
+    .ka-side-divider {
+      height: 1px;
+      background: var(--ka-line);
+      margin: 0.15rem 0 0.65rem 0;
+      opacity: 0.95;
     }
     .ka-side-sp { height: 0.55rem; }
     p.ka-lib-file {
@@ -997,18 +1039,39 @@ st.markdown(
       padding-bottom: 0.3rem;
     }
     [data-testid="stSidebar"] [data-testid="stFileUploader"] label p {
-      font-size: 0.77rem !important;
-      font-weight: 500 !important;
-      color: var(--ka-muted) !important;
+      font-size: 0.76rem !important;
+      font-weight: 600 !important;
+      color: var(--ka-text) !important;
+      letter-spacing: 0.01em;
     }
     section[data-testid="stFileUploaderDropzone"] {
-      min-height: 2.55rem;
-      padding: 0.45rem 0.6rem;
-      border-radius: 0.5rem !important;
+      min-height: 2.85rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 0.65rem !important;
       border-style: dashed !important;
+      border-width: 1.5px !important;
       border-color: var(--ka-line) !important;
       background: var(--ka-surface) !important;
-      transition: border-color 0.15s ease, background 0.15s ease;
+      transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+    }
+    section[data-testid="stFileUploaderDropzone"]:hover {
+      border-color: rgba(37, 99, 235, 0.28) !important;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.06);
+    }
+    [data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {
+      border-radius: 0.55rem !important;
+      border-color: var(--ka-line) !important;
+      background: var(--ka-surface) !important;
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+      border-radius: 0.65rem !important;
+      font-weight: 600 !important;
+      letter-spacing: 0.01em;
+      box-shadow: 0 1px 3px rgba(37, 99, 235, 0.22);
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="secondary"] {
+      border-radius: 0.65rem !important;
+      font-weight: 500 !important;
     }
     [data-testid="stSidebar"] table {
       width: 100%;
@@ -1028,13 +1091,13 @@ st.markdown(
     [data-testid="stSidebar"] table td { color: var(--ka-muted); }
     .ka-hero-wrap {
       text-align: center;
-      padding: 3rem 1.35rem 1.4rem;
-      max-width: 32rem;
-      margin: 0 auto 0.65rem auto;
-      border-radius: 1.05rem;
+      padding: 2.75rem 1.5rem 1.5rem;
+      max-width: 34rem;
+      margin: 0 auto 0.75rem auto;
+      border-radius: 1.15rem;
       border: 1px solid var(--ka-line);
       background: var(--ka-surface);
-      box-shadow: 0 2px 12px rgba(15, 23, 42, 0.06);
+      box-shadow: 0 4px 24px rgba(15, 23, 42, 0.055);
     }
     .ka-hero-wrap .ka-hero-title {
       font-weight: 600;
@@ -1085,6 +1148,9 @@ st.markdown(
       --ka-chat-user: rgba(30, 41, 59, 0.75);
       --ka-chat-asst: rgba(15, 23, 42, 0.55);
       --ka-accent: rgba(96, 165, 250, 0.45);
+      --ka-app-bg-top: #0f172a;
+      --ka-app-bg-mid: #111827;
+      --ka-app-bg-bot: #0b1220;
     }
     </style>
     """,
@@ -1144,7 +1210,7 @@ run_pending_assistant_turn(
 )
 
 render_composer_task_hint(task_mode, summarize_scope)
-prompt = st.chat_input("Message…")
+prompt = st.chat_input("Ask anything…")
 if prompt:
     q = prompt.strip()
     if q:
