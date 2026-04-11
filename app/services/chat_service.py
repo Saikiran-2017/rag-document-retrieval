@@ -38,6 +38,7 @@ from app.llm.deterministic_extraction import (
     try_extract_field_value_answer,
 )
 from app.llm.query_intent import (
+    is_assistant_identity_question,
     is_broad_document_overview_query,
     is_section_navigation_query,
     is_sparse_entity_lookup_query,
@@ -228,6 +229,13 @@ def _general_or_abstain(
     return safe_general_answer(query)
 
 
+_MSG_ASSISTANT_IDENTITY = (
+    "I'm **Knowledge Assistant**, the in-app helper for this document workspace. "
+    "I'm not the same individual as anyone described in your uploads. "
+    "For a **person in a file**, ask what the document states (for example, “What name appears in the document?”)."
+)
+
+
 def _hit_debug_rows(hits: list[RetrievedChunk], limit: int = 8) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for i, h in enumerate(hits[:limit]):
@@ -357,6 +365,34 @@ def _answer_user_query_impl(
     conversation_history: list[dict[str, Any]] | None = None,
 ) -> AssistantTurn:
     conv_hints = build_conversation_retrieval_hints(query, conversation_history)
+    if is_assistant_identity_question(query.strip()):
+        if _streaming_enabled():
+
+            def _id_tok() -> Iterator[str]:
+                yield _MSG_ASSISTANT_IDENTITY
+
+            return _finalize_answer(
+                AssistantTurn(
+                    mode="general",
+                    text="",
+                    assistant_note=None,
+                    stream_tokens=_id_tok,
+                ),
+                routing="general_assistant_identity",
+                retrieval_ran=False,
+                retrieval_hit_count=0,
+                fallback_to_general=False,
+                exception_summary=None,
+            )
+        return _finalize_answer(
+            AssistantTurn(mode="general", text=_MSG_ASSISTANT_IDENTITY, assistant_note=None),
+            routing="general_assistant_identity",
+            retrieval_ran=False,
+            retrieval_hit_count=0,
+            fallback_to_general=False,
+            exception_summary=None,
+        )
+
     doc_intent = effective_user_expects_document_grounding(query, conv_hints)
 
     debug_service.log_retrieval_event(

@@ -27,7 +27,14 @@ class ConversationRetrievalHints:
 
 
 _FOLLOW_PRONOUN = re.compile(
-    r"\b(his|her|their|its)\s+(name|full\s*name|address|email|e-?mail|phone|mobile|number)\b",
+    r"\b(his|her|their|its)\s+(name|full\s*name|title|role|job|position|skills?|experience|background|"
+    r"address|email|e-?mail|phone|mobile|number)\b",
+    re.I,
+)
+_FOLLOW_SUBJECT_AUX = re.compile(
+    r"\b(does|did|do|is|are|was|were|can|could|would|will)\s+[\w']{0,22}?\b(he|she|they|him|her)\b"
+    r"|\b(he|she|they)\s+(know|knows|knew|have|has|had|work|works|worked|use|uses|used)\b"
+    r"|\b(doe|does|did)\s+he\b",
     re.I,
 )
 _FOLLOW_DOC_DEICTIC = re.compile(
@@ -123,9 +130,15 @@ def _looks_like_doc_followup(query: str) -> bool:
     q = (query or "").strip()
     if not q:
         return False
+    from app.llm.query_intent import should_bypass_document_intent_for_query
+
+    if should_bypass_document_intent_for_query(q):
+        return False
     if _GENERAL_TECH.search(q):
         return False
     if _FOLLOW_PRONOUN.search(q):
+        return True
+    if _FOLLOW_SUBJECT_AUX.search(q):
         return True
     if _FOLLOW_DOC_DEICTIC.search(q):
         return True
@@ -137,8 +150,27 @@ def _looks_like_doc_followup(query: str) -> bool:
         return True
     if re.search(r"\b(include|included|mention|mentions|list|lists)\b", q, re.I) and len(q) < 180:
         return True
-    if len(q) <= 72 and _FOLLOW_WH_START.search(q):
+    if re.search(r"\bwhat\s+about\s+(his|her|their|the|this|my|your)\b", q, re.I):
         return True
+    # Short WH-questions only count as doc follow-ups when they clearly anchor to the library
+    # (pronoun / deictic / doc-shaped noun)—not every vague "what is …" after a grounded reply.
+    if len(q) <= 100 and _FOLLOW_WH_START.search(q):
+        if re.search(r"\b(his|her|their|its|he|she|they|him)\b", q, re.I):
+            return True
+        if re.search(
+            r"\b(the|this|my|that|your)\s+"
+            r"(loan|application|file|document|upload|library|amount|balance|name|number|address|"
+            r"city|email|phone|record|policy|packet|form|memo|brief|playbook)\b",
+            q,
+            re.I,
+        ):
+            return True
+        if re.search(
+            r"\b(my|your)\s+(loan|file|document|application|upload|policy|library)\b",
+            q,
+            re.I,
+        ):
+            return True
     return False
 
 
@@ -169,6 +201,11 @@ def build_conversation_retrieval_hints(
     if not dominant:
         return base
 
+    from app.llm.query_intent import should_bypass_document_intent_for_query
+
+    if should_bypass_document_intent_for_query(q):
+        return base
+
     if not _looks_like_doc_followup(q):
         return base
 
@@ -187,10 +224,28 @@ def build_conversation_retrieval_hints(
 
     relax = bool(
         _FOLLOW_PRONOUN.search(q)
+        or _FOLLOW_SUBJECT_AUX.search(q)
         or _METADATA_Q.search(q)
         or _ADDRESS_Q.search(q)
         or _FOLLOW_DOC_DEICTIC.search(q)
-        or (_FOLLOW_WH_START.search(q) and len(q) < 100)
+        or (
+            _FOLLOW_WH_START.search(q)
+            and len(q) < 100
+            and (
+                re.search(r"\b(his|her|their|its|he|she|they|him)\b", q, re.I)
+                or re.search(
+                    r"\b(the|this|my|that|your)\s+"
+                    r"(loan|application|file|document|upload|library|amount|balance|name|number|address)\b",
+                    q,
+                    re.I,
+                )
+                or re.search(
+                    r"\b(my|your)\s+(loan|file|document|application|upload|policy|library)\b",
+                    q,
+                    re.I,
+                )
+            )
+        )
     )
 
     return ConversationRetrievalHints(
@@ -210,6 +265,11 @@ def is_short_document_deictic_followup(query: str) -> bool:
 
 
 def effective_user_expects_document_grounding(query: str, hints: ConversationRetrievalHints) -> bool:
-    from app.llm.query_intent import user_expects_document_grounding
+    from app.llm.query_intent import (
+        should_bypass_document_intent_for_query,
+        user_expects_document_grounding,
+    )
 
+    if should_bypass_document_intent_for_query(query):
+        return False
     return user_expects_document_grounding(query) or hints.force_document_scoped_routing

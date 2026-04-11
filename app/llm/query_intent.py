@@ -32,6 +32,54 @@ _DOCUMENT_SCOPE = re.compile(
     re.I,
 )
 
+# Assistant / product identity — never treat as document-scoped (Phase M).
+_ASSISTANT_IDENTITY = re.compile(
+    r"^\s*("
+    r"who\s+are\s+you\b|"
+    r"what\s+are\s+you\b|"
+    r"what(?:'s|\s+is)\s+your\s+name\b|"
+    r"who\s+(built|created|made|owns|runs)\s+(you|this(\s+app|\s+assistant|\s+tool|\s+product|\s+service)?)\b|"
+    r"what\s+are\s+you\s+called\b|"
+    r"what\s+model\s+are\s+you\b|"
+    r"what\s+is\s+this\s+(app|tool|assistant|product|service|website)\b"
+    r")\s*[?.!]*\s*$",
+    re.I,
+)
+
+# Short general knowledge role / concept prompts (Phase N) — not document questions by themselves.
+_GENERAL_ROLE_OR_CONCEPT = re.compile(
+    r"^\s*("
+    r"(what\s+is\s+)?(an?\s+)?(ml|machine\s+learning)\s+engineer\b|"
+    r"(what\s+is\s+)?(a\s+)?data\s+(engineer|scientist)\b|"
+    r"(what\s+is\s+)?(a\s+)?machine\s+learning\s+engineer\b|"
+    r"data\s+(engineer|scientist)\b|"
+    r"(ml|machine\s+learning)\s+engineer\b"
+    r")\s*[?.!]*\s*$",
+    re.I,
+)
+
+
+def is_assistant_identity_question(query: str) -> bool:
+    """True when the user asks about the assistant or host product, not library content."""
+    q = (query or "").strip()
+    if len(q) < 3:
+        return False
+    return bool(_ASSISTANT_IDENTITY.search(q))
+
+
+def is_general_short_concept_query(query: str) -> bool:
+    """True for compact definitions of common roles without document deixis."""
+    q = (query or "").strip()
+    if not q or len(q) > 120:
+        return False
+    return bool(_GENERAL_ROLE_OR_CONCEPT.search(q))
+
+
+def should_bypass_document_intent_for_query(query: str) -> bool:
+    """True when routing must not treat the turn as document-scoped (identity / general concepts)."""
+    return is_assistant_identity_question(query) or is_general_short_concept_query(query)
+
+
 # Broad / document-level questions: skip LLM query rewrite and optionally run a second retrieval pass.
 _BROAD_OVERVIEW = re.compile(
     r"\b("
@@ -56,6 +104,8 @@ def user_expects_document_grounding(query: str) -> bool:
     """True when the question should run retrieval if a library exists (disables general fast path)."""
     q = (query or "").strip()
     if len(q) < 4:
+        return False
+    if should_bypass_document_intent_for_query(q):
         return False
     return bool(_DOCUMENT_SCOPE.search(q))
 
