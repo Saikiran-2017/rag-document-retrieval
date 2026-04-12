@@ -12,6 +12,8 @@ env/
 !.env.local.template
 *.pem
 
+private_docs/
+
 # Local eval console capture and ad-hoc logs (never commit)
 eval/_stdout*.txt
 eval/_phase20f*.txt
