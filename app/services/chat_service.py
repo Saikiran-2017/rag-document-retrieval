@@ -47,6 +47,7 @@ from app.llm.query_intent import (
     user_expects_document_grounding,
     uses_relaxed_document_grounding_gate,
 )
+from app.llm.query_normalize import normalize_query_for_pipeline
 from app.llm.query_rewrite import rewrite_for_retrieval
 from app.retrieval.context_selection import (
     hybrid_pool_size,
@@ -145,11 +146,12 @@ def materialize_streamed_turn(
     if not turn.stream_tokens:
         return turn
     ft = (full_text or "").strip()
+    logic_q = normalize_query_for_pipeline(user_query) if user_query else None
     if turn.mode == "grounded" and turn.hits:
         raw = ft or UNKNOWN_PHRASE
         fixed, warn = validate_grounded_answer(raw, turn.hits, unknown_phrase=UNKNOWN_PHRASE)
         fb_ans, fb_warn = _apply_grounded_unknown_fallbacks(
-            user_query,
+            logic_q,
             turn.hits,
             fixed,
             short_about_fallback=short_about_fallback,
@@ -1199,7 +1201,8 @@ def answer_user_query(
     ``task_mode`` ``summarize`` / ``extract`` / ``compare`` runs document-centric prompts
     (rule-selected in the UI). ``auto`` preserves the original chat + Q&A routing.
     """
-    if not query.strip():
+    stripped = query.strip()
+    if not stripped:
         return _finalize_answer(
             AssistantTurn(mode="error", text=MSG_EMPTY_MESSAGE, error=MSG_EMPTY_MESSAGE),
             routing="error_empty",
@@ -1207,12 +1210,13 @@ def answer_user_query(
             retrieval_hit_count=0,
             fallback_to_general=False,
         )
+    logic_query = normalize_query_for_pipeline(stripped)
     try:
         if task_mode in ("summarize", "extract", "compare"):
             from app.services.doc_task_service import DocTask, run_document_task
 
             return run_document_task(
-                query,
+                logic_query,
                 cast(DocTask, task_mode),
                 raw_dir=raw_dir,
                 faiss_folder=faiss_folder,
@@ -1222,7 +1226,7 @@ def answer_user_query(
                 summarize_scope=summarize_scope,
             )
         return _answer_user_query_impl(
-            query,
+            logic_query,
             raw_dir=raw_dir,
             faiss_folder=faiss_folder,
             chunk_size=chunk_size,
@@ -1233,7 +1237,7 @@ def answer_user_query(
     except Exception as exc:
         if debug_service.debug_enabled():
             debug_service.merge(unhandled_answer_exception=debug_service.short_exc(exc))
-        text, gerr = _general_or_abstain(query)
+        text, gerr = _general_or_abstain(logic_query)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
             routing="general_unhandled_fallback",

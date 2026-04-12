@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 
 from app.config import get_openai_api_key
 from app.llm.query_intent import is_broad_document_overview_query
+from app.llm.query_normalize import normalize_query_for_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def should_skip_rewrite_llm(query: str) -> bool:
 
     Still respects ``KA_NO_REWRITE=1`` inside :func:`rewrite_for_retrieval`.
     """
-    q = query.strip()
+    q = normalize_query_for_pipeline(query.strip())
     if len(q) < 8:
         return True
     if len(q) <= 52 and len(q.split()) <= 6:
@@ -46,8 +47,8 @@ def rewrite_for_retrieval(user_query: str, *, model: str = "gpt-4o-mini") -> str
     Skips the LLM when ``KA_NO_REWRITE=1``, query is very short, or :func:`should_skip_rewrite_llm` is true.
     """
     if os.environ.get("KA_NO_REWRITE", "").strip().lower() in ("1", "true", "yes"):
-        return user_query.strip()
-    q = user_query.strip()
+        return normalize_query_for_pipeline(user_query.strip())
+    q = normalize_query_for_pipeline(user_query.strip())
     if is_broad_document_overview_query(q):
         return q
     if should_skip_rewrite_llm(q):

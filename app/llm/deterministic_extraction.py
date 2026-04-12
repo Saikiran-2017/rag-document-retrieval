@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.llm.query_intent import normalize_query_for_field_intent
+from app.llm.query_normalize import normalize_query_for_pipeline
 from app.retrieval.vector_store import RetrievedChunk
 
 
@@ -120,7 +120,7 @@ _FIELD_PATTERNS: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
 
 
 def _query_kind(query: str) -> str | None:
-    q = normalize_query_for_field_intent((query or "").strip()).lower()
+    q = normalize_query_for_pipeline((query or "").strip()).lower()
     if not q:
         return None
     if re.search(r"\b(his|her|their)\s+name\b|\bwhat\s+is\s+(his|her|their)\s+name\b", q):
@@ -433,7 +433,7 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
     Deterministic fallback for broad overview / summary questions when excerpts
     cluster on a dominant source. Produces meaning-focused prose (not a field inventory).
     """
-    qn = normalize_query_for_field_intent(query or "")
+    qn = normalize_query_for_pipeline(query or "")
     if not hits or not _DOC_ABOUT_Q.search(qn):
         return None
 

@@ -34,7 +34,8 @@ def test_general_tech_question_not_treated_as_doc_follow_up() -> None:
     ]
     h = build_conversation_retrieval_hints("what is RAG?", hist)
     assert h.force_document_scoped_routing is False
-    assert h.retrieval_query.strip() == "what is RAG?"
+    # Pipeline normalization lowercases logic strings (retrieval seed, not UI copy).
+    assert h.retrieval_query.strip() == "what is rag?"
 
 
 def test_effective_document_intent_includes_conversation_override() -> None:

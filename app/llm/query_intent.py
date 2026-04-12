@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from app.llm.query_normalize import normalize_query_for_pipeline
+
 # If any pattern matches, do not use the no-retrieval fast path.
 _DOCUMENT_SCOPE = re.compile(
     r"\b("
@@ -106,27 +108,8 @@ def should_bypass_document_intent_for_query(query: str) -> bool:
 
 
 def normalize_query_for_field_intent(query: str) -> str:
-    """
-    Light typo normalization so field and document-scope patterns still match user input.
-
-    Conservative: only common single-character swaps / omissions in short field tokens.
-    """
-    q = (query or "").strip()
-    if not q:
-        return q
-    repl = (
-        ("phne", "phone"),
-        ("fone", "phone"),
-        ("emial", "email"),
-        ("e-mail", "email"),
-        ("nuber", "number"),
-        ("numbr", "number"),
-    )
-    low = q.lower()
-    for bad, good in repl:
-        if bad in low:
-            low = low.replace(bad, good)
-    return low if low != q.lower() else q
+    """Backward-compatible alias for :func:`normalize_query_for_pipeline`."""
+    return normalize_query_for_pipeline(query)
 
 
 # Broad / document-level questions: skip LLM query rewrite and optionally run a second retrieval pass.
@@ -255,7 +238,7 @@ def is_sparse_entity_lookup_query(query: str) -> bool:
     True for short entity/role lookups where vector distance is often just above strict QA
     but hybrid RRF still shows a good keyword match (e.g. CFO name).
     """
-    q = (query or "").strip()
+    q = normalize_query_for_pipeline((query or "").strip())
     if len(q) < 10:
         return False
     if _LOOKUP_NEGATIVE.search(q):
@@ -281,7 +264,7 @@ def is_section_navigation_query(query: str) -> bool:
 
     Used to widen retrieval, boost heading-like matches, and pass more diverse chunks to the LLM.
     """
-    q = (query or "").strip().lower()
+    q = normalize_query_for_pipeline((query or "").strip()).lower()
     if len(q) < 12:
         return False
     if re.search(r"\bsection\s*(?:#|number|num\.?)?\s*\d+\b", q):

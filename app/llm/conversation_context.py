@@ -15,6 +15,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+from app.llm.query_normalize import normalize_query_for_pipeline
+
 
 @dataclass(frozen=True)
 class ConversationRetrievalHints:
@@ -158,7 +160,7 @@ def _dominant_name(names: list[str]) -> str | None:
 
 
 def _looks_like_doc_followup(query: str) -> bool:
-    q = (query or "").strip()
+    q = normalize_query_for_pipeline((query or "").strip())
     if not q:
         return False
     from app.llm.query_intent import should_bypass_document_intent_for_query
@@ -218,7 +220,7 @@ def build_conversation_retrieval_hints(
     ``conversation_history`` should be turns *before* the current user message, oldest-first.
     Each item may include standard chat fields plus optional ``sources`` / ``mode`` from SQLite extras.
     """
-    q = (query or "").strip()
+    q = normalize_query_for_pipeline((query or "").strip())
     hist = [m for m in (conversation_history or []) if isinstance(m, dict)]
     base = ConversationRetrievalHints(
         retrieval_query=q,
@@ -251,6 +253,7 @@ def build_conversation_retrieval_hints(
         prev_user = prev_user.strip()
         if len(prev_user) > 260:
             prev_user = prev_user[-260:]
+        prev_user = normalize_query_for_pipeline(prev_user)
         parts.append(prev_user)
     parts.append(q)
     parts.append(dominant)
@@ -301,7 +304,7 @@ def build_conversation_retrieval_hints(
 
 def is_short_document_deictic_followup(query: str) -> bool:
     """True for very short turns like ``in document`` that anchor to prior grounded context."""
-    q = (query or "").strip()
+    q = normalize_query_for_pipeline((query or "").strip())
     if len(q) > 88:
         return False
     return bool(_FOLLOW_DOC_DEICTIC.search(q))
