@@ -16,6 +16,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from app.llm.query_intent import normalize_query_for_field_intent
 from app.retrieval.vector_store import RetrievedChunk
 
 
@@ -91,6 +92,21 @@ _FIELD_PATTERNS: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
         ),
     ),
     (
+        "website",
+        (
+            re.compile(
+                rf"\b(website|web{_WS}page|homepage|url)\b{_WS}[:\-]?\s*"
+                rf"((?:https?://|www\.)[A-Za-z0-9._~/?#=\-]+)",
+                re.I,
+            ),
+            re.compile(
+                rf"\b(website|url)\b{_WS}[:\-]?\s*"
+                rf"([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]{1,24})+\.(?:com|net|org|io|edu|gov)\b)",
+                re.I,
+            ),
+        ),
+    ),
+    (
         "address",
         (
             re.compile(
@@ -103,7 +119,7 @@ _FIELD_PATTERNS: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
 
 
 def _query_kind(query: str) -> str | None:
-    q = (query or "").strip().lower()
+    q = normalize_query_for_field_intent((query or "").strip()).lower()
     if not q:
         return None
     if re.search(r"\b(his|her|their)\s+name\b|\bwhat\s+is\s+(his|her|their)\s+name\b", q):
@@ -125,10 +141,12 @@ def _query_kind(query: str) -> str | None:
         q,
     ):
         return "loan_disbursed_amount"
-    if re.search(r"\b(e-?mail(\s+address)?|email(\s+address)?)\b", q):
+    if re.search(r"\b(e-?mail(\s+address)?|email(\s+address)?|contact\s+e-?mail|contact\s+email)\b", q):
         return "email"
     if re.search(r"\b(phone|phone number|mobile|contact number|contact|cell|telephone)\b", q):
         return "phone"
+    if re.search(r"\b(website|web\s*page|homepage|\burl\b)\b", q):
+        return "website"
     if re.search(
         r"\b(current\s+)?address\b|\bstreet address\b|\bmailing address\b|\bcurrent\s+address\b",
         q,
@@ -248,6 +266,14 @@ def try_extract_field_value_answer(query: str, hits: list[RetrievedChunk]) -> Ex
                         ),
                         used_source_numbers=(idx,),
                     )
+                if kind == "website":
+                    url = m.group(2).strip()
+                    return ExtractedAnswer(
+                        answer=(
+                            f"The document lists the website / URL as {url} [SOURCE {idx}]."
+                        ),
+                        used_source_numbers=(idx,),
+                    )
                 if kind == "address":
                     addr = m.group(2).strip()
                     addr = _merge_address_continuation(lines, li, addr)
@@ -330,7 +356,10 @@ def try_answer_document_metadata_question(query: str, hits: list[RetrievedChunk]
 
 _DOC_ABOUT_Q = re.compile(
     r"\b(what\s+is\s+(this|the|it)\s+.*\s+about|what\s+is\s+this\s+document\s+about|"
-    r"summarize\s+this\s+(file|document)|what\s+does\s+this\s+(file|document)\s+contain|"
+    r"summar(?:y|ise|izing)\s+(?:of\s+)?(?:this|the|my)\s+(?:document|file)\b|"
+    r"(?:give\s+me\s+)?a?\s*summary\s+of\s+(?:this|the|my)\s+(?:document|file)\b|"
+    r"summarize\s+this\s+(file|document)|summarize\s+the\s+(file|document)|summarize\s+my\s+(file|document)|"
+    r"what\s+does\s+this\s+(file|document)\s+contain|"
     r"what\s+is\s+in\s+this\s+(file|document))\b",
     re.I,
 )
@@ -346,7 +375,8 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
     - retrieval selected a dominant document, and
     - the excerpts expose obvious structure (field labels / section-ish lines).
     """
-    if not hits or not _DOC_ABOUT_Q.search(query or ""):
+    qn = normalize_query_for_field_intent(query or "")
+    if not hits or not _DOC_ABOUT_Q.search(qn):
         return None
 
     srcs = [str(h.metadata.get("source_name") or "").strip() for h in hits]

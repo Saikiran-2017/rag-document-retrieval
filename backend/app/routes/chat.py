@@ -9,6 +9,8 @@ from fastapi.responses import StreamingResponse
 from backend.app.core.config import Settings, get_settings
 from backend.app.schemas.chat import ChatRequest, ChatResponse
 from backend.app.schemas.serialization import chat_metadata_dict, chat_response_from_turn
+from app.llm.conversation_context import is_short_document_deictic_followup
+
 from backend.app.services import chat_service
 from backend.app.utils.sse import format_sse
 
@@ -63,7 +65,12 @@ def post_chat(
             os.environ["KA_NO_STREAM"] = prev
     if turn.stream_tokens:
         full = "".join(turn.stream_tokens())
-        turn = chat_service.materialize_streamed_turn(turn, full)
+        turn = chat_service.materialize_streamed_turn(
+            turn,
+            full,
+            user_query=req.message.strip(),
+            short_about_fallback=is_short_document_deictic_followup(req.message.strip()),
+        )
     return chat_response_from_turn(turn)
 
 
@@ -123,7 +130,12 @@ def _chat_sse_events(req: ChatRequest, settings: Settings) -> Iterator[str]:
                 buf.append(piece)
                 if piece:
                     yield format_sse({"type": "token", "delta": piece}, event="token")
-            turn = chat_service.materialize_streamed_turn(turn, "".join(buf))
+            turn = chat_service.materialize_streamed_turn(
+                turn,
+                "".join(buf),
+                user_query=req.message.strip(),
+                short_about_fallback=is_short_document_deictic_followup(req.message.strip()),
+            )
         else:
             chunk = turn.text or turn.error or ""
             if chunk:

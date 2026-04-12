@@ -105,6 +105,7 @@ Rules:
 - When you state a fact from the Text, cite it with the matching label, e.g. [SOURCE 1].
 - If two Text passages contradict each other, say so briefly and cite both sources.
 - If the question asks for content not present in the Text lines, say so and use the unknown phrase above.
+- If the question names a specific person, company, product, or program (for example a CEO, employer, rocket program, or product name) and the Text does not state the requested fact, use the unknown phrase. Do not fill in with outside news, statistics, or general knowledge about that entity.
 - For overview, summary, main themes, or "what is this document about" questions, synthesize across all SOURCE blocks you were given; cite multiple [SOURCE n] when different sections support different parts of the answer.
 - When CONTEXT includes multiple [SOURCE N] blocks and more than one is relevant, use more than one citation; do not answer from only the first block if other blocks clearly apply.
 - If the question targets a named section, heading topic, or a specific role/title (e.g. CFO), a single explicit sentence in the Text that states the fact is sufficient: answer briefly and cite that source. Do not abstain only because the passage is short, when it clearly names the section/topic or the person/role asked about.

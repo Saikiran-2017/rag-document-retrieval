@@ -97,7 +97,47 @@ def _streaming_enabled() -> bool:
     return os.environ.get("KA_NO_STREAM", "").strip().lower() not in ("1", "true", "yes")
 
 
-def materialize_streamed_turn(turn: AssistantTurn, full_text: str) -> AssistantTurn:
+def _apply_grounded_unknown_fallbacks(
+    query: str | None,
+    hits: list[RetrievedChunk],
+    answer_text: str,
+    *,
+    short_about_fallback: bool,
+) -> tuple[str, str | None]:
+    """
+    When a grounded completion is the unknown phrase, try deterministic fallbacks
+    (section quote, structured overview) so streaming and non-stream paths stay aligned.
+    """
+    if not query or not hits:
+        return answer_text, None
+    if UNKNOWN_PHRASE.lower() not in (answer_text or "").lower():
+        return answer_text, None
+    cur = answer_text
+    warn_acc: str | None = None
+    if is_section_navigation_query(query):
+        sec_fb = try_answer_section_navigation_fallback(query, hits)
+        if sec_fb is not None:
+            cur, w = validate_grounded_answer(sec_fb.answer, hits, unknown_phrase=UNKNOWN_PHRASE)
+            warn_acc = merge_notes(warn_acc, w)
+    if UNKNOWN_PHRASE.lower() in cur.lower():
+        overview = try_build_grounded_document_overview(query, hits)
+        if overview is None and short_about_fallback:
+            overview = try_build_grounded_document_overview("what is this document about?", hits)
+        if overview is not None:
+            cur, w = validate_grounded_answer(overview.answer, hits, unknown_phrase=UNKNOWN_PHRASE)
+            warn_acc = merge_notes(warn_acc, w)
+    if cur != answer_text:
+        return cur, warn_acc
+    return answer_text, None
+
+
+def materialize_streamed_turn(
+    turn: AssistantTurn,
+    full_text: str,
+    *,
+    user_query: str | None = None,
+    short_about_fallback: bool = False,
+) -> AssistantTurn:
     """After streaming completes, fill ``text`` / ``grounded`` for persistence and expanders."""
     if not turn.stream_tokens:
         return turn
@@ -105,6 +145,15 @@ def materialize_streamed_turn(turn: AssistantTurn, full_text: str) -> AssistantT
     if turn.mode == "grounded" and turn.hits:
         raw = ft or UNKNOWN_PHRASE
         fixed, warn = validate_grounded_answer(raw, turn.hits, unknown_phrase=UNKNOWN_PHRASE)
+        fb_ans, fb_warn = _apply_grounded_unknown_fallbacks(
+            user_query,
+            turn.hits,
+            fixed,
+            short_about_fallback=short_about_fallback,
+        )
+        if fb_ans != fixed:
+            fixed = fb_ans
+        warn = merge_notes(warn, fb_warn)
         ga = GroundedAnswer(
             answer=fixed,
             sources=chunks_to_source_refs(turn.hits),
@@ -182,6 +231,12 @@ def _wants_blended_web(query: str) -> bool:
     # "Who is the CFO" matches time-sensitive heuristics but should stay document-grounded when
     # library hits exist (avoid unrelated web CFO news in blended answers).
     if is_sparse_entity_lookup_query(query):
+        return False
+    ql = (query or "").lower()
+    if re.search(
+        r"\b(technologies|technology\s+stack|projects?\s+mentioned|employees|headcount|workforce)\b",
+        ql,
+    ):
         return False
     return bool(_TIME_SENSITIVE_HINT.search(query))
 
@@ -810,6 +865,30 @@ def _answer_user_query_impl(
                     fallback_to_general=False,
                     **common_diag,
                 )
+            overview_early = try_build_grounded_document_overview(query, hits)
+            if overview_early is not None:
+                fixed_o, warn_o = validate_grounded_answer(
+                    overview_early.answer, hits, unknown_phrase=UNKNOWN_PHRASE
+                )
+                ga_o = GroundedAnswer(
+                    answer=fixed_o,
+                    sources=chunks_to_source_refs(hits),
+                    validation_warning=warn_o,
+                )
+                return _finalize_answer(
+                    AssistantTurn(
+                        mode="grounded",
+                        text=ga_o.answer,
+                        grounded=ga_o,
+                        hits=hits,
+                        assistant_note=ga_o.validation_warning,
+                    ),
+                    routing="grounded_deterministic_overview",
+                    retrieval_ran=True,
+                    retrieval_hit_count=len(hits),
+                    fallback_to_general=False,
+                    **common_diag,
+                )
             if stream:
 
                 def _gtok() -> Iterator[str]:
@@ -861,36 +940,21 @@ def _answer_user_query_impl(
             # but retrieval clearly surfaces a dominant document with obvious structure,
             # provide a conservative deterministic overview instead of a false refusal.
             if UNKNOWN_PHRASE.lower() in (ga.answer or "").lower():
-                replaced_unknown = False
-                if section_nav:
-                    sec_fb = try_answer_section_navigation_fallback(query, hits)
-                    if sec_fb is not None:
-                        fixed, warn = validate_grounded_answer(
-                            sec_fb.answer, hits, unknown_phrase=UNKNOWN_PHRASE
-                        )
-                        ga = GroundedAnswer(
-                            answer=fixed,
-                            sources=chunks_to_source_refs(hits),
-                            validation_warning=warn,
-                        )
-                        replaced_unknown = True
-                if not replaced_unknown:
-                    overview = try_build_grounded_document_overview(query, hits)
-                    if overview is None and conv_hints.force_document_scoped_routing and is_short_document_deictic_followup(
-                        query
-                    ):
-                        overview = try_build_grounded_document_overview(
-                            "what is this document about?", hits
-                        )
-                    if overview is not None:
-                        fixed, warn = validate_grounded_answer(
-                            overview.answer, hits, unknown_phrase=UNKNOWN_PHRASE
-                        )
-                        ga = GroundedAnswer(
-                            answer=fixed,
-                            sources=chunks_to_source_refs(hits),
-                            validation_warning=warn,
-                        )
+                short_fb = bool(
+                    conv_hints.force_document_scoped_routing and is_short_document_deictic_followup(query)
+                )
+                fb_ans, fb_warn = _apply_grounded_unknown_fallbacks(
+                    query,
+                    hits,
+                    ga.answer,
+                    short_about_fallback=short_fb,
+                )
+                if fb_ans != ga.answer:
+                    ga = GroundedAnswer(
+                        answer=fb_ans,
+                        sources=chunks_to_source_refs(hits),
+                        validation_warning=merge_notes(ga.validation_warning, fb_warn),
+                    )
             return _finalize_answer(
                 AssistantTurn(
                     mode="grounded",

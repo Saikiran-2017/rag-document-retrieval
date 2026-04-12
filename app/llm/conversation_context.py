@@ -69,6 +69,35 @@ _GENERAL_TECH = re.compile(
     re.I,
 )
 
+# Short "What is Starship?" style follow-ups after a grounded turn: stay in-document unless
+# this is clearly a general definition prompt (RAG, LLM, etc.).
+_FOLLOWUP_WHATIS_TERM = re.compile(
+    r"^\s*what\s+is\s+([A-Za-z][A-Za-z0-9\-]{1,32})\s*\??\s*$",
+    re.I,
+)
+_FOLLOWUP_WHATIS_BLOCKLIST = frozenset(
+    {
+        "rag",
+        "ml",
+        "llm",
+        "nlp",
+        "sql",
+        "api",
+        "aws",
+        "etl",
+        "gpu",
+        "cpu",
+        "cdn",
+        "http",
+        "https",
+        "json",
+        "xml",
+        "csv",
+        "pdf",
+        "gpt",
+    }
+)
+
 
 def _extract_source_names_from_assistant_message(msg: dict[str, Any]) -> list[str]:
     raw = msg.get("sources")
@@ -154,6 +183,11 @@ def _looks_like_doc_followup(query: str) -> bool:
         return True
     if re.search(r"\bwhat\s+about\s+(his|her|their|the|this|my|your)\b", q, re.I):
         return True
+    m_term = _FOLLOWUP_WHATIS_TERM.match(q)
+    if m_term and len(q) <= 72 and not _GENERAL_TECH.search(q):
+        term = m_term.group(1).lower()
+        if term not in _FOLLOWUP_WHATIS_BLOCKLIST:
+            return True
     # Short WH-questions only count as doc follow-ups when they clearly anchor to the library
     # (pronoun / deictic / doc-shaped noun)—not every vague "what is …" after a grounded reply.
     if len(q) <= 100 and _FOLLOW_WH_START.search(q):
@@ -224,12 +258,19 @@ def build_conversation_retrieval_hints(
     if len(merged) > 520:
         merged = merged[:520]
 
+    m_what_is = _FOLLOWUP_WHATIS_TERM.match(q)
     relax = bool(
         _FOLLOW_PRONOUN.search(q)
         or _FOLLOW_SUBJECT_AUX.search(q)
         or _METADATA_Q.search(q)
         or _ADDRESS_Q.search(q)
         or _FOLLOW_DOC_DEICTIC.search(q)
+        or (
+            m_what_is
+            and len(q) <= 72
+            and not _GENERAL_TECH.search(q)
+            and (m_what_is.group(1).lower() not in _FOLLOWUP_WHATIS_BLOCKLIST)
+        )
         or (
             _FOLLOW_WH_START.search(q)
             and len(q) < 100

@@ -28,6 +28,12 @@ _DOCUMENT_SCOPE = re.compile(
     r"performance|latency|latencies|throughput|benchmark|metric|metrics|"
     r"sla\b|requirements?|p99|discussed|discussion|plain language"
     r"|loan|loans|applicant|application\s+number|disbursed\s+amount|repayment\s+schedule|interest\s+certificate|rate\s+of\s+interest"
+    r"|what\s+company|which\s+company|company\s+discussed|organization\s+discussed|employer\s+discussed"
+    r"|what\s+projects|projects?\s+mentioned|programs?\s+mentioned|initiatives?\s+mentioned"
+    r"|what\s+technologies|technologies\s+(used|does|do|are)|technology\s+stack"
+    r"|how\s+many\s+employees|employee\s+count|headcount|workforce\s+size"
+    r"|website\b|web\s*site|homepage|contact\s+email|contact\s+number"
+    r"|\bdoes\s+[A-Z][a-z]+\s+[A-Z][a-z]+\s+know\b"
     r")\b",
     re.I,
 )
@@ -36,8 +42,9 @@ _DOCUMENT_SCOPE = re.compile(
 _STRUCTURED_FIELD_DOC_Q = re.compile(
     r"("
     r"\bwhat\s*(?:'s|is|was)\s+(?:the\s+)?(?:his|her|their|its|my|your|our)?\s*"
-    r"(?:e-?mail(?:\s+address)?|email(?:\s+address)?|phone(?:\s+number)?|contact(?:\s+number)?|mobile\b|"
-    r"(?:full\s+)?name\b|(?:current\s+)?address\b)\b"
+    r"(?:e-?mail(?:\s+address)?|email(?:\s+address)?|contact\s+e-?mail|contact\s+email|"
+    r"phone(?:\s+number)?|contact(?:\s+number)?|mobile\b|"
+    r"(?:full\s+)?name\b|(?:current\s+)?address\b|website\b|web\s*page|homepage|\burl\b)\b"
     r"|"
     r"\b(?:his|her|their|its|my|your)\s+(?:e-?mail|email|phone|mobile|address|name)\b"
     r"|"
@@ -97,6 +104,30 @@ def should_bypass_document_intent_for_query(query: str) -> bool:
     return is_assistant_identity_question(query) or is_general_short_concept_query(query)
 
 
+def normalize_query_for_field_intent(query: str) -> str:
+    """
+    Light typo normalization so field and document-scope patterns still match user input.
+
+    Conservative: only common single-character swaps / omissions in short field tokens.
+    """
+    q = (query or "").strip()
+    if not q:
+        return q
+    repl = (
+        ("phne", "phone"),
+        ("fone", "phone"),
+        ("emial", "email"),
+        ("e-mail", "email"),
+        ("nuber", "number"),
+        ("numbr", "number"),
+    )
+    low = q.lower()
+    for bad, good in repl:
+        if bad in low:
+            low = low.replace(bad, good)
+    return low if low != q.lower() else q
+
+
 # Broad / document-level questions: skip LLM query rewrite and optionally run a second retrieval pass.
 _BROAD_OVERVIEW = re.compile(
     r"\b("
@@ -111,7 +142,9 @@ _BROAD_OVERVIEW = re.compile(
     r"purpose\s+of\s+(this|the|my)\s+(file|document)?|"
     r"high[-\s]?level|big\s+picture|"
     r"central\s+theme|takeaways?|highlights?|"
-    r"give\s+me\s+an?\s+overview|brief\s+overview"
+    r"give\s+me\s+an?\s+overview|brief\s+overview|"
+    r"summar(?:y|ise|izing)\s+(?:of\s+)?(?:this|the|my)\s+(?:document|file)\b|"
+    r"(?:give\s+me\s+)?a?\s*summary\s+of\s+(?:this|the|my)\s+(?:document|file)\b"
     r")\b",
     re.I,
 )
@@ -119,7 +152,7 @@ _BROAD_OVERVIEW = re.compile(
 
 def user_expects_document_grounding(query: str) -> bool:
     """True when the question should run retrieval if a library exists (disables general fast path)."""
-    q = (query or "").strip()
+    q = normalize_query_for_field_intent((query or "").strip())
     if len(q) < 4:
         return False
     if should_bypass_document_intent_for_query(q):
@@ -131,7 +164,7 @@ def user_expects_document_grounding(query: str) -> bool:
 
 def is_broad_document_overview_query(query: str) -> bool:
     """True for high-level doc questions that need diverse chunks and should not be over-compressed by rewrite."""
-    q = (query or "").strip()
+    q = normalize_query_for_field_intent((query or "").strip())
     if len(q) < 6:
         return False
     return bool(_BROAD_OVERVIEW.search(q))
@@ -149,9 +182,18 @@ def uses_relaxed_document_grounding_gate(query: str) -> bool:
     """
     if is_broad_document_overview_query(query):
         return True
-    q = (query or "").strip().lower()
+    q = normalize_query_for_field_intent((query or "").strip()).lower()
     if len(q) < 10:
         return False
+    if re.search(
+        r"\b(what\s+company|which\s+company|company\s+discussed|organization\s+discussed)\b",
+        q,
+    ):
+        return True
+    if re.search(r"\bwhat\s+projects\b|\bprojects?\s+mentioned\b", q):
+        return True
+    if re.search(r"\bwhat\s+technologies\b|\btechnologies\s+(does|do|are|used)\b", q):
+        return True
     perf = bool(
         re.search(
             r"\b(performance|latency|p99|throughput|workload|sla|benchmark|metrics?|reliability)\b",
@@ -170,6 +212,8 @@ def uses_relaxed_document_grounding_gate(query: str) -> bool:
 # Narrow entity / role questions: relax hybrid L2 slightly when RRF is strong (Phase 29).
 _ENTITY_LOOKUP_SAFE = re.compile(
     r"\b("
+    r"company\b|organization\b|employer\b|"
+    r"website\b|homepage\b|\burl\b|"
     r"named\s+as\b|"
     r"who\s+is\s+named\b|"
     r"name\s+of\b|"

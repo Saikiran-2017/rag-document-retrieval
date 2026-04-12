@@ -15,6 +15,7 @@ from typing import Any
 import streamlit as st
 
 from app import project_meta, streamlit_icons as st_icons
+from app.llm.conversation_context import is_short_document_deictic_followup
 from app.ingestion.loader import get_default_raw_dir
 from app.persistence import chat_store, document_manifest
 from app.retrieval.vector_store import get_default_faiss_folder
@@ -389,7 +390,12 @@ def run_pending_assistant_turn(
 
             full = st.write_stream(gen())
             perf_service.record_phase_ms("generation", (time.perf_counter() - t_stream) * 1000)
-            final_turn = chat_service.materialize_streamed_turn(turn, full)
+            final_turn = chat_service.materialize_streamed_turn(
+                turn,
+                full,
+                user_query=str(pend["q"]),
+                short_about_fallback=is_short_document_deictic_followup(str(pend["q"]).strip()),
+            )
         else:
             final_turn = turn
             render_assistant_message(turn_to_ui_message(turn))

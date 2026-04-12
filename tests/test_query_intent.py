@@ -42,6 +42,8 @@ def test_machine_learning_short_query_stays_general_concept():
 def test_broad_overview_flag():
     assert is_broad_document_overview_query("What is this document about?")
     assert is_broad_document_overview_query("Summarize this file")
+    assert is_broad_document_overview_query("summarize this document")
+    assert is_broad_document_overview_query("give me a summary of this document")
     assert not is_broad_document_overview_query("What is the revenue in Q3 per the table?")
 
 
@@ -53,6 +55,9 @@ def test_relaxed_gate_gold_broad_and_ambiguous():
         "Give a concise summary of the key ideas in the long internal playbook."
     )
     assert uses_relaxed_document_grounding_gate("How is performance discussed?")
+    assert uses_relaxed_document_grounding_gate("what company is discussed")
+    assert uses_relaxed_document_grounding_gate("what projects are mentioned")
+    assert uses_relaxed_document_grounding_gate("what technologies does spacex use")
 
 
 def test_relaxed_gate_false_for_negative_eval_queries():
