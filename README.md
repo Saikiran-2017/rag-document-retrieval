@@ -1,5 +1,7 @@
 # Knowledge Assistant
 
+**Author / maintainer:** Sai Kiran
+
 **Production-style RAG document Q&A** with honest routing: answers **cite your PDFs, Word docs, and text files** when retrieval and file health are strong enough—and fall back to **general** replies (without fake citations) when the library is empty, sync fails, or evidence is weak.
 
 **Stack:** Python · OpenAI (embeddings + chat) · LangChain · **FAISS** · **BM25 hybrid** · **Streamlit** · **FastAPI** · **Next.js** (TypeScript) · SQLite · Docker

@@ -1,6 +1,8 @@
 """
 FastAPI entrypoint.
 
+HTTP host for the same RAG workspace as Streamlit (portfolio build, Sai Kiran).
+
 **Local dev** (repository root)::
 
     set PYTHONPATH=.

@@ -1,4 +1,7 @@
-"""User-facing copy, merged status notes, and small display-formatting helpers."""
+"""User-facing copy, merged status notes, and small display-formatting helpers.
+
+Portfolio / interview project; copy curated by Sai Kiran.
+"""
 
 from __future__ import annotations
 

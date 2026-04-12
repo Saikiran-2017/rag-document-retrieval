@@ -1,4 +1,8 @@
-"""Streamlit UI for Knowledge Assistant. Run: streamlit run streamlit_app.py"""
+"""
+Streamlit UI for Knowledge Assistant. Run: streamlit run streamlit_app.py
+
+Primary UI for the RAG workspace (portfolio build). Maintainer: Sai Kiran.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ from typing import Any
 
 import streamlit as st
 
-from app import streamlit_icons as st_icons
+from app import project_meta, streamlit_icons as st_icons
 from app.ingestion.loader import get_default_raw_dir
 from app.persistence import chat_store, document_manifest
 from app.retrieval.vector_store import get_default_faiss_folder
@@ -715,6 +719,7 @@ def render_sidebar_documents_and_actions(
                 format_func=lambda x: "All documents" if x == "all" else str(x),
                 help="All documents or one file from your library.",
             )
+        st.caption(project_meta.PREFERENCES_CREDIT_LINE)
 
     cs, co, _tk_read = read_settings()
     if st.button("Sync library", use_container_width=True, type="primary"):
@@ -730,6 +735,12 @@ def render_sidebar_documents_and_actions(
     render_sidebar_positioning()
 
     debug_service.render_debug_panel()
+
+    st.markdown(
+        f'<p class="ka-attribution" data-ka-signature="{html.escape(project_meta.PROJECT_SIGNATURE)}">'
+        f"{html.escape(project_meta.SIDEBAR_CREDIT_LINE)}</p>",
+        unsafe_allow_html=True,
+    )
 
 
 # set_page_config must run before any other Streamlit command (including session_state).
@@ -751,6 +762,7 @@ faiss_folder = get_default_faiss_folder()
 st.markdown(
     """
     <style>
+    /* Workspace UI chrome · Sai Kiran · SK-RAG-Workspace (attribution only; no layout effect). */
     @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
     :root {
       --ka-text: rgba(15, 23, 42, 0.94);
@@ -1051,6 +1063,16 @@ st.markdown(
       line-height: 1.52;
       color: var(--ka-muted);
       margin: 0 0 1.15rem 0;
+    }
+    p.ka-attribution {
+      font-size: 0.68rem !important;
+      line-height: 1.45 !important;
+      color: var(--ka-muted) !important;
+      margin: 1.1rem 0 0.15rem 0 !important;
+      padding: 0 0.1rem !important;
+      letter-spacing: 0.02em;
+      opacity: 0.82;
+      text-align: left;
     }
     .ka-side-h {
       font-size: 0.64rem;

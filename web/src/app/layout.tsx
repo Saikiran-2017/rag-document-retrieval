@@ -16,6 +16,10 @@ export const metadata: Metadata = {
   title: "Knowledge Assistant",
   description:
     "Chat with your documents. When your library applies, answers cite your files.",
+  authors: [{ name: "Sai Kiran" }],
+  other: {
+    "ka-signature": "SK-RAG-Workspace",
+  },
 };
 
 export default function RootLayout({
