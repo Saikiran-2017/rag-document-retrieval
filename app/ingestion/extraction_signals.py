@@ -58,7 +58,7 @@ def _pdf_quick_signal(path: Path) -> tuple[ExtractionQuality, str | None]:
         if avg < 35:
             return (
                 "low_text",
-                "Little selectable text — scanned or image-heavy PDFs may need optional OCR.",
+                "Little selectable text. Scanned or image-heavy PDFs may need optional OCR.",
             )
         return "good", None
     except Exception as exc:

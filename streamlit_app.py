@@ -597,7 +597,7 @@ def render_sidebar_documents_and_actions(
 ) -> None:
     """Upload, library list, preferences (before sync so values apply), sync, new chat, positioning, debug."""
     st.markdown('<p class="ka-side-h">Upload</p>', unsafe_allow_html=True)
-    st.caption("PDF, Word, or plain text — attach here, then Sync or send a message.")
+    st.caption("PDF, Word, or plain text. Attach here, then Sync or send a message.")
     rid = int(st.session_state.get("composer_reset", 0))
     st.file_uploader(
         "Add files",
@@ -841,7 +841,7 @@ st.markdown(
       min-height: 0 !important;
       height: auto !important;
     }
-    /* Main column root under .block-container — only the subtree that contains the composer. */
+    /* Main column root under .block-container: only the subtree that contains the composer. */
     .main .block-container > div:has([data-testid="stChatInput"]) {
       margin-bottom: 0 !important;
       padding-bottom: 0 !important;
