@@ -29,6 +29,41 @@ def composite_retrieval_score(hit: RetrievedChunk) -> float:
     return 3.0 * rrf + inv_d
 
 
+_FIELD_LABEL_HINT = re.compile(
+    r"(?i)(full\s*name|e-?mail|email|phone|contact\s*number|website|homepage|\burl\b|address)\s*[:#\-]",
+)
+
+
+def prioritize_structured_field_hits(hits: list[RetrievedChunk], query: str) -> list[RetrievedChunk]:
+    """
+    Move chunks that likely contain form-style label lines earlier (stable by original rank).
+
+    Improves BM25/RRF pools for short field questions without changing embedding math.
+    """
+    if len(hits) < 2:
+        return hits
+    q = (query or "").lower()
+    if not re.search(
+        r"\b(name|email|e-?mail|phone|contact|website|url|homepage|address)\b",
+        q,
+    ):
+        return hits
+
+    def score(hit: RetrievedChunk) -> tuple[int, int]:
+        t = hit.page_content or ""
+        s = 0
+        if _FIELD_LABEL_HINT.search(t):
+            s += 10
+        if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", t):
+            s += 2
+        if re.search(r"\b(?:\+?\d[\d\s().-]{8,})\b", t):
+            s += 1
+        return (-s, hit.rank)
+
+    order = sorted(range(len(hits)), key=lambda i: score(hits[i]))
+    return [hits[i] for i in order]
+
+
 def prioritize_section_navigation_hits(
     hits: list[RetrievedChunk], query: str
 ) -> list[RetrievedChunk]:

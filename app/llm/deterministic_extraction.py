@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.llm.query_intent import normalize_query_for_field_intent
 from app.retrieval.vector_store import RetrievedChunk
@@ -499,4 +500,68 @@ def try_answer_section_navigation_fallback(
         if needle.search(flat) and len(flat) <= 520:
             return ExtractedAnswer(answer=f"{flat} [SOURCE {idx}]", used_source_numbers=(idx,))
     return None
+
+
+_EMAIL_ANY = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
+
+def try_extract_field_from_raw_library(
+    query: str,
+    raw_paths: list[Path | str],
+    *,
+    preferred_source: str | None = None,
+) -> tuple[ExtractedAnswer, list[RetrievedChunk]] | None:
+    """
+    Scan uploaded library files on disk (full normalized text per file) for obvious field rows.
+
+    Used when hybrid chunks miss a label/value pair that still exists in the raw file.
+    """
+    from app.ingestion.loader import load_file
+
+    kind = _query_kind(query)
+    if not kind or not raw_paths:
+        return None
+    paths = [Path(p) for p in raw_paths]
+    ps = (preferred_source or "").strip().lower()
+    if ps:
+        paths.sort(key=lambda p: 0 if p.name.lower() == ps else 1)
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            docs = load_file(path)
+        except Exception:
+            continue
+        full = "\n\n".join((d.text or "").strip() for d in docs if (d.text or "").strip())
+        if len(full) < 4:
+            continue
+        sn = path.name
+        preview = full[:12000]
+        hit = RetrievedChunk(
+            rank=0,
+            page_content=preview,
+            metadata={
+                "source_name": sn,
+                "chunk_id": f"raw-scan:{sn}",
+                "page_number": None,
+                "file_path": str(path.resolve()),
+            },
+            distance=0.35,
+        )
+        ext = try_extract_field_value_answer(query, [hit])
+        if ext is None and kind == "email":
+            m = _EMAIL_ANY.search(full)
+            if m:
+                ext = ExtractedAnswer(
+                    answer=(
+                        f"The document states that the email address is {m.group(0)} [SOURCE 1]."
+                    ),
+                    used_source_numbers=(1,),
+                )
+        if ext is not None:
+            return ext, [hit]
+    return None
+
+
+field_value_question_kind = _query_kind
 

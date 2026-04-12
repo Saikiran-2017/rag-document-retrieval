@@ -32,9 +32,11 @@ from app.llm.conversation_context import (
     is_short_document_deictic_followup,
 )
 from app.llm.deterministic_extraction import (
+    field_value_question_kind,
     try_answer_document_metadata_question,
     try_answer_section_navigation_fallback,
     try_build_grounded_document_overview,
+    try_extract_field_from_raw_library,
     try_extract_field_value_answer,
 )
 from app.llm.query_intent import (
@@ -49,6 +51,7 @@ from app.llm.query_rewrite import rewrite_for_retrieval
 from app.retrieval.context_selection import (
     hybrid_pool_size,
     prioritize_section_navigation_hits,
+    prioritize_structured_field_hits,
     rerank_hybrid_hits,
     select_generation_context,
 )
@@ -569,7 +572,12 @@ def _answer_user_query_impl(
     broad_overview = is_broad_document_overview_query(query)
     relaxed_doc_gate = uses_relaxed_document_grounding_gate(query) or conv_hints.relax_lookup_gate
     section_nav = is_section_navigation_query(query)
-    lookup_relaxed = is_sparse_entity_lookup_query(query) or conv_hints.relax_lookup_gate
+    _field_kind = field_value_question_kind(query)
+    lookup_relaxed = (
+        is_sparse_entity_lookup_query(query)
+        or conv_hints.relax_lookup_gate
+        or (_field_kind is not None)
+    )
     wide_retrieval = broad_overview or relaxed_doc_gate or section_nav or conv_hints.relax_lookup_gate
     if wide_retrieval:
         k_pool = min(nvec, max(base_pool, 22))
@@ -585,6 +593,8 @@ def _answer_user_query_impl(
             rewritten = retrieval_q.strip()
         else:
             rewritten = rewrite_for_retrieval(retrieval_q)
+        if _field_kind is not None:
+            rewritten = f"{rewritten} Full Name Email Phone Website Contact Address".strip()
         record_phase_ms("rewrite", (time.perf_counter() - t_rw) * 1000)
         with timed_phase("retrieval"):
             pool_hits = hybrid_retrieve(
@@ -617,6 +627,8 @@ def _answer_user_query_impl(
                 ranked_hits = prioritize_section_navigation_hits(ranked_hits, query)
             n_after_rerank = len(ranked_hits)
             trusted_hits = document_health.filter_trusted_retrieval_hits(faiss_folder, ranked_hits)
+            if _field_kind is not None and trusted_hits:
+                trusted_hits = prioritize_structured_field_hits(trusted_hits, query)
             if wide_retrieval and len(trusted_hits) > 1:
                 trusted_hits = document_health.promote_alternate_top_for_limited_grounding(
                     faiss_folder,
@@ -635,8 +647,10 @@ def _answer_user_query_impl(
                 focus_nm = str(conv_hints.focus_source_name).strip() or None
             elif trusted_hits and (lookup_relaxed or section_nav):
                 focus_nm = str(trusted_hits[0].metadata.get("source_name") or "").strip() or None
-            hits = (
-                select_generation_context(
+            sum_intent = is_broad_document_overview_query(query)
+            hits: list[RetrievedChunk] = []
+            if doc_good:
+                hits = select_generation_context(
                     trusted_hits,
                     mode="qa",
                     top_k=int(top_k),
@@ -645,9 +659,33 @@ def _answer_user_query_impl(
                     section_navigation_query=section_nav,
                     focus_source_name=focus_nm,
                 )
-                if doc_good
-                else []
-            )
+            elif sum_intent and trusted_hits:
+                hits = select_generation_context(
+                    trusted_hits,
+                    mode="qa",
+                    top_k=int(top_k),
+                    nvec=nvec,
+                    broad_document_question=True,
+                    section_navigation_query=False,
+                    focus_source_name=focus_nm,
+                )
+                if hits:
+                    doc_good = True
+                    gate_reason = f"{gate_reason}|summary_library_override"
+            elif _field_kind is not None and trusted_hits:
+                th2 = prioritize_structured_field_hits(trusted_hits, query)
+                hits = select_generation_context(
+                    th2,
+                    mode="qa",
+                    top_k=int(top_k),
+                    nvec=nvec,
+                    broad_document_question=True,
+                    section_navigation_query=False,
+                    focus_source_name=focus_nm,
+                )
+                if hits:
+                    doc_good = True
+                    gate_reason = f"{gate_reason}|field_context_override"
             debug_service.log_retrieval_event(
                 "retrieval_hybrid_done",
                 user_query_preview=query[:200],
@@ -683,6 +721,36 @@ def _answer_user_query_impl(
         debug_service.log_retrieval_event(
             "retrieval_exception", error=debug_service.short_exc(exc)
         )
+        if field_value_question_kind(query) is not None and index_service.list_raw_files(raw_dir):
+            rb_exc = try_extract_field_from_raw_library(
+                query,
+                index_service.list_raw_files(raw_dir),
+                preferred_source=conv_hints.focus_source_name,
+            )
+            if rb_exc is not None:
+                extx, rhx = rb_exc
+                fixed_x, warn_x = validate_grounded_answer(
+                    extx.answer, rhx, unknown_phrase=UNKNOWN_PHRASE
+                )
+                ga_x = GroundedAnswer(
+                    answer=fixed_x,
+                    sources=chunks_to_source_refs(rhx),
+                    validation_warning=warn_x,
+                )
+                return _finalize_answer(
+                    AssistantTurn(
+                        mode="grounded",
+                        text=ga_x.answer,
+                        grounded=ga_x,
+                        hits=rhx,
+                        assistant_note=ga_x.validation_warning,
+                    ),
+                    routing="grounded_deterministic_raw_scan_retrieval_error",
+                    retrieval_ran=False,
+                    retrieval_hit_count=len(rhx),
+                    fallback_to_general=False,
+                    exception_summary=debug_service.short_exc(exc),
+                )
         text, gerr = _general_or_abstain(query, document_scoped=doc_intent)
         return _finalize_answer(
             AssistantTurn(mode="general", text=text, assistant_note=None),
@@ -692,6 +760,39 @@ def _answer_user_query_impl(
             fallback_to_general=True,
             exception_summary=gerr or debug_service.short_exc(exc),
         )
+
+    if (
+        not doc_good
+        and _field_kind is not None
+        and doc_intent
+        and index_service.list_raw_files(raw_dir)
+    ):
+        rb_gate = try_extract_field_from_raw_library(
+            query,
+            index_service.list_raw_files(raw_dir),
+            preferred_source=conv_hints.focus_source_name,
+        )
+        if rb_gate is not None:
+            extg, rhg = rb_gate
+            fixed_g, warn_g = validate_grounded_answer(extg.answer, rhg, unknown_phrase=UNKNOWN_PHRASE)
+            ga_g = GroundedAnswer(
+                answer=fixed_g,
+                sources=chunks_to_source_refs(rhg),
+                validation_warning=warn_g,
+            )
+            return _finalize_answer(
+                AssistantTurn(
+                    mode="grounded",
+                    text=ga_g.answer,
+                    grounded=ga_g,
+                    hits=rhg,
+                    assistant_note=ga_g.validation_warning,
+                ),
+                routing="grounded_deterministic_raw_scan_weak_gate",
+                retrieval_ran=True,
+                retrieval_hit_count=0,
+                fallback_to_general=False,
+            )
 
     if debug_service.debug_enabled():
         top = hits[0] if hits else (ranked_hits[0] if ranked_hits else None)
@@ -842,6 +943,36 @@ def _answer_user_query_impl(
                 )
             # Deterministic extraction for obvious field/value queries (prevents false refusals).
             extracted = try_extract_field_value_answer(query, hits)
+            if extracted is None and _field_kind is not None:
+                rb = try_extract_field_from_raw_library(
+                    query,
+                    index_service.list_raw_files(raw_dir),
+                    preferred_source=conv_hints.focus_source_name,
+                )
+                if rb is not None:
+                    ext2, rhits = rb
+                    fixed, warn = validate_grounded_answer(
+                        ext2.answer, rhits, unknown_phrase=UNKNOWN_PHRASE
+                    )
+                    ga = GroundedAnswer(
+                        answer=fixed,
+                        sources=chunks_to_source_refs(rhits),
+                        validation_warning=warn,
+                    )
+                    return _finalize_answer(
+                        AssistantTurn(
+                            mode="grounded",
+                            text=ga.answer,
+                            grounded=ga,
+                            hits=rhits,
+                            assistant_note=ga.validation_warning,
+                        ),
+                        routing="grounded_deterministic_raw_scan",
+                        retrieval_ran=True,
+                        retrieval_hit_count=len(rhits),
+                        fallback_to_general=False,
+                        **common_diag,
+                    )
             if extracted is not None:
                 fixed, warn = validate_grounded_answer(
                     extracted.answer, hits, unknown_phrase=UNKNOWN_PHRASE

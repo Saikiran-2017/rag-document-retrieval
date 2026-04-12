@@ -47,6 +47,7 @@ def _validate_split_params(chunk_size: int, chunk_overlap: int) -> None:
 
 
 # Prefer paragraph / markdown headings / line / sentence boundaries before hard cuts.
+# Avoid ": " as a split boundary so "Email: user@..." stays on one line with its value.
 _CHUNK_SEPARATORS = [
     "\n\n",
     "\n# ",
@@ -61,7 +62,6 @@ _CHUNK_SEPARATORS = [
     "? ",
     "! ",
     "; ",
-    ": ",
     ", ",
     " ",
     "",

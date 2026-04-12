@@ -101,7 +101,8 @@ def is_general_short_concept_query(query: str) -> bool:
 
 def should_bypass_document_intent_for_query(query: str) -> bool:
     """True when routing must not treat the turn as document-scoped (identity / general concepts)."""
-    return is_assistant_identity_question(query) or is_general_short_concept_query(query)
+    q = normalize_query_for_field_intent((query or "").strip())
+    return is_assistant_identity_question(q) or is_general_short_concept_query(q)
 
 
 def normalize_query_for_field_intent(query: str) -> str:
@@ -129,6 +130,8 @@ def normalize_query_for_field_intent(query: str) -> str:
 
 
 # Broad / document-level questions: skip LLM query rewrite and optionally run a second retrieval pass.
+_SUMMARY_STANDALONE = re.compile(r"^\s*summarize\s*[?.!]*\s*$", re.I)
+
 _BROAD_OVERVIEW = re.compile(
     r"\b("
     r"what\s+is\s+(this|the|it)\s+.+\s+about|"
@@ -143,6 +146,8 @@ _BROAD_OVERVIEW = re.compile(
     r"high[-\s]?level|big\s+picture|"
     r"central\s+theme|takeaways?|highlights?|"
     r"give\s+me\s+an?\s+overview|brief\s+overview|"
+    r"give\s+(me\s+)?(a\s+)?summary\b|"
+    r"explain\s+(this|the|my)\s+(document|file)\b|"
     r"summar(?:y|ise|izing)\s+(?:of\s+)?(?:this|the|my)\s+(?:document|file)\b|"
     r"(?:give\s+me\s+)?a?\s*summary\s+of\s+(?:this|the|my)\s+(?:document|file)\b"
     r")\b",
@@ -165,6 +170,10 @@ def user_expects_document_grounding(query: str) -> bool:
 def is_broad_document_overview_query(query: str) -> bool:
     """True for high-level doc questions that need diverse chunks and should not be over-compressed by rewrite."""
     q = normalize_query_for_field_intent((query or "").strip())
+    if len(q) < 4:
+        return False
+    if _SUMMARY_STANDALONE.match(q):
+        return True
     if len(q) < 6:
         return False
     return bool(_BROAD_OVERVIEW.search(q))
@@ -257,7 +266,7 @@ def is_sparse_entity_lookup_query(query: str) -> bool:
     ask = bool(
         re.search(
             r"\b(name|named|id|identifier|uuid|date|owner|lead|manager|contact|applicant|application|loan|disbursed|"
-            r"e-?mail|email|phone|mobile|address)\b",
+            r"e-?mail|email|phone|mobile|address|website|homepage|url)\b",
             ql,
         )
     )
