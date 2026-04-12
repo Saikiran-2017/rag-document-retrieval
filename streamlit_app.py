@@ -802,7 +802,8 @@ st.markdown(
     [data-testid="stDecoration"] { display: none !important; }
     .main .block-container {
       padding-top: 1rem !important;
-      padding-bottom: 1.5rem !important;
+      /* Flush chat input to viewport bottom (Streamlit adds extra block padding by default). */
+      padding-bottom: 0 !important;
       max-width: 52rem !important;
       margin-left: auto !important;
       margin-right: auto !important;
@@ -823,8 +824,37 @@ st.markdown(
       margin-right: 0.35rem;
       opacity: 0.85;
     }
+    /* Wrappers around the composer often retain default block spacing. */
+    .main [data-testid="element-container"]:has([data-testid="stChatInput"]) {
+      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    /* Inner Emotion layout shell (direct child of element-container): still carried bottom margin/padding. */
+    .main [data-testid="element-container"]:has([data-testid="stChatInput"]) > div {
+      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    /* Main column root under .block-container — only the subtree that contains the composer. */
+    .main .block-container > div:has([data-testid="stChatInput"]) {
+      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    /* Flex column that stacks the markdown hint + chat input (theme padding on the block itself). */
+    .main [data-testid="stVerticalBlock"]:has([data-testid="stChatInput"]) {
+      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    .main [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stChatInput"]) {
+      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    div[data-testid="stChatInput"],
+    div[data-testid="stChatInputContainer"],
+    .stChatInputContainer {
+      padding-bottom: 0 !important;
+      margin-bottom: 0 !important;
+    }
     div[data-testid="stChatInput"] {
-      padding-bottom: 1rem;
       padding-top: 0.75rem;
       border-top: 1px solid var(--ka-line);
       margin-top: 0.35rem;
@@ -833,6 +863,12 @@ st.markdown(
     div[data-testid="stChatInput"] textarea {
       font-size: 0.97rem !important;
       line-height: 1.5 !important;
+    }
+    /* Direct child shell + textarea parent: theme still left bottom padding/margin on these nodes. */
+    .main div[data-testid="stChatInput"] > div:has([data-testid="stChatInputTextArea"]),
+    .main div[data-testid="stChatInput"] div:has(> [data-testid="stChatInputTextArea"]) {
+      padding-bottom: 0 !important;
+      margin-bottom: 0 !important;
     }
     [data-testid="stChatMessage"] {
       padding: 0.75rem 1rem 0.85rem 1rem !important;
