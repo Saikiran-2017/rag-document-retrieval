@@ -11,7 +11,7 @@ Provide a real `OPENAI_API_KEY` via **environment variable** (safest for public 
 From the repository root:
 
 ```bash
-# Windows CMD — env var first (recommended)
+# Windows CMD: env var first (recommended)
 set OPENAI_API_KEY=sk-...your-real-key...
 set PYTHONPATH=.
 .venv\Scripts\python.exe scripts/run_document_qa_eval.py --json-report eval/_report_local.json

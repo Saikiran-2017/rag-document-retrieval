@@ -93,7 +93,7 @@ To change the API URL baked into the web image, edit **`docker-compose.yml`** `a
 
 - **OpenAI:** embedding + chat usage per query and sync.
 - **Free tiers:** cold starts and sleep (e.g. Render free) affect first request latency.
-- **Portfolio:** a cold start is acceptable; document it in README or demo notes.
+- **Cold starts:** acceptable on free tiers; note first-request latency in the README if you ship a public URL.
 
 ---
 
