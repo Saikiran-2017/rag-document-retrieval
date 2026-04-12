@@ -33,8 +33,9 @@ _FOLLOW_PRONOUN = re.compile(
 )
 _FOLLOW_SUBJECT_AUX = re.compile(
     r"\b(does|did|do|is|are|was|were|can|could|would|will)\s+[\w']{0,22}?\b(he|she|they|him|her)\b"
-    r"|\b(he|she|they)\s+(know|knows|knew|have|has|had|work|works|worked|use|uses|used)\b"
-    r"|\b(doe|does|did)\s+he\b",
+    r"|\b(he|she|they)\s+(know|knows|knew|knw|knws|have|has|had|work|works|worked|use|uses|used)\b"
+    r"|\b(doe|does|did)\s+he\b"
+    r"|\b(where|when)\s+(does|do|did|is|was)\s+[\w']{0,16}?\b(he|she|they)\b",
     re.I,
 )
 _FOLLOW_DOC_DEICTIC = re.compile(
@@ -51,7 +52,8 @@ _METADATA_Q = re.compile(
     r"\b("
     r"file\s*name|filename|document\s*name|name\s+of\s+(the\s+)?(file|document)|"
     r"which\s+file|what\s+file|what\s+is\s+the\s+(file|document)|"
-    r"which\s+document|source\s+file"
+    r"which\s+document(\s+is\s+this)?|what\s+document(\s+is\s+this)?|"
+    r"source\s+file"
     r")\b",
     re.I,
 )

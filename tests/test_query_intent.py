@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.llm.query_intent import (
     is_broad_document_overview_query,
+    is_general_short_concept_query,
     is_section_navigation_query,
     is_sparse_entity_lookup_query,
     user_expects_document_grounding,
@@ -24,6 +25,18 @@ def test_main_topics_triggers_retrieval():
 
 def test_casual_greeting_can_fastpath():
     assert wants_no_retrieval_fastpath("Hello there")
+
+
+def test_structured_field_questions_expect_document_grounding():
+    for q in ("What is the email?", "what is his phone number?", "What is the full name?"):
+        assert user_expects_document_grounding(q), q
+        assert not wants_no_retrieval_fastpath(q), q
+
+
+def test_machine_learning_short_query_stays_general_concept():
+    for q in ("what is machine learning?", "machine learning", "what is ml?"):
+        assert is_general_short_concept_query(q), q
+        assert not user_expects_document_grounding(q), q
 
 
 def test_broad_overview_flag():

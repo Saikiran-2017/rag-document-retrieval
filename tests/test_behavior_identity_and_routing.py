@@ -97,3 +97,18 @@ def test_pronoun_follow_up_still_merge() -> None:
     ]
     h = build_conversation_retrieval_hints("what is his name?", hist)
     assert h.force_document_scoped_routing is True
+
+
+def test_where_does_he_work_follow_up_merges() -> None:
+    hist = [
+        {"role": "user", "content": "Summarize the resume in the library."},
+        {
+            "role": "assistant",
+            "content": "They list experience at Acme Corp [SOURCE 1].",
+            "grounded": True,
+            "sources": [{"source_name": "resume_case.txt", "source_number": 1}],
+        },
+    ]
+    h = build_conversation_retrieval_hints("where does he work?", hist)
+    assert h.force_document_scoped_routing is True
+    assert "resume_case" in h.retrieval_query.lower()

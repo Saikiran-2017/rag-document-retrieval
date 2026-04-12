@@ -52,3 +52,31 @@ def test_his_name_maps_to_labeled_person_field() -> None:
 def test_negative_missing_field_returns_none() -> None:
     hits = [_hit("Only unrelated boilerplate text here.")]
     assert try_extract_field_value_answer("what is the passport number?", hits) is None
+
+
+def test_plain_name_label_top_of_form() -> None:
+    hits = [_hit("Name: Alex Morgan\nRole: Analyst")]
+    out = try_extract_field_value_answer("what is the full name?", hits)
+    assert out is not None
+    assert "Alex Morgan" in out.answer
+    assert "[SOURCE 1]" in out.answer
+
+
+def test_address_continues_next_line() -> None:
+    hits = [
+        _hit(
+            "Current Address: 200 Oak Avenue,\n"
+            "Building C, Floor 3\n"
+            "Springfield, ST 62704"
+        ),
+    ]
+    out = try_extract_field_value_answer("what is the address?", hits)
+    assert out is not None
+    assert "Oak" in out.answer and "62704" in out.answer
+
+
+def test_metadata_which_document_is_this() -> None:
+    hits = [_hit("x", source="report_q2.pdf")]
+    out = try_answer_document_metadata_question("which document is this?", hits)
+    assert out is not None
+    assert "report_q2.pdf" in out.answer

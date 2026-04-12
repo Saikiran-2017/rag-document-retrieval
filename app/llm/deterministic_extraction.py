@@ -33,50 +33,70 @@ _AMOUNT = r"(?:₹\s*)?\d{1,3}(?:,\d{3})*(?:\.\d{2})"
 # IDs: allow alnum and a few separators.
 _ID = r"[A-Z0-9][A-Z0-9\-\/]{3,}"
 
-_FIELD_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+# One or more regexes per logical field kind (tried in order; first match wins).
+_FIELD_PATTERNS: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
     (
         "loan_disbursed_amount",
-        re.compile(
-            rf"\b(loan{_WS}disbursed{_WS}amount|disbursed{_WS}amount|loan{_WS}amount)\b{_WS}[:\-]?\s*({_AMOUNT})\b",
-            re.I,
+        (
+            re.compile(
+                rf"\b(loan{_WS}disbursed{_WS}amount|disbursed{_WS}amount|loan{_WS}amount)\b{_WS}[:\-]?\s*({_AMOUNT})\b",
+                re.I,
+            ),
         ),
     ),
     (
         "person_name",
-        re.compile(
-            rf"\b("
-            rf"applicant{_WS}name|full{_WS}name|subject{_WS}name|borrower{_WS}name|primary{_WS}holder|"
-            rf"customer{_WS}name|account{_WS}holder|legal{_WS}name"
-            rf")\b{_WS}[:\-]?\s*([A-Z][A-Za-z \.\'\-]{{2,}})\b",
-            re.I,
+        (
+            re.compile(
+                rf"\b("
+                rf"applicant{_WS}name|full{_WS}name|subject{_WS}name|borrower{_WS}name|primary{_WS}holder|"
+                rf"customer{_WS}name|account{_WS}holder|legal{_WS}name"
+                rf")\b{_WS}[:\-]?\s*([A-Z][A-Za-z \.\'\-]{{2,}})\b",
+                re.I,
+            ),
+            # Top-of-form "Name:" / "Full name:" (label is a whole word; avoids "username:" false positives).
+            re.compile(
+                rf"^\s*(?:full{_WS}name|(?<![A-Za-z])name(?![A-Za-z]))\s*[:\-]\s*([A-Za-z][A-Za-z \.\'\-]{{2,}})\b",
+                re.I,
+            ),
         ),
     ),
     (
         "application_number",
-        re.compile(
-            rf"\b(application{_WS}(number|no\.?|#))\b{_WS}[:\-]?\s*({_ID})\b",
-            re.I,
+        (
+            re.compile(
+                rf"\b(application{_WS}(number|no\.?|#))\b{_WS}[:\-]?\s*({_ID})\b",
+                re.I,
+            ),
         ),
     ),
     (
         "email",
-        re.compile(
-            rf"\b(e-?mail|email)\b{_WS}[:\-]?\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})\b",
-            re.I,
+        (
+            re.compile(
+                rf"\b(e-?mail{_WS}address|email{_WS}address|e-?mail|email)\b{_WS}[:\-]?\s*"
+                rf"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})\b",
+                re.I,
+            ),
         ),
     ),
     (
         "phone",
-        re.compile(
-            rf"\b(contact|phone|mobile|cell|tel\.?)\s*(number)?\b{_WS}[:\-]?\s*([\d()+\-\s]{{10,24}})\b",
-            re.I,
+        (
+            re.compile(
+                rf"\b(contact{_WS}number|phone{_WS}number|contact|phone|mobile|cell|tel\.?)\b{_WS}[:\-]?\s*"
+                rf"([\d()+\-\s]{{10,24}})\b",
+                re.I,
+            ),
         ),
     ),
     (
         "address",
-        re.compile(
-            rf"\b(current\s+)?address\b{_WS}[:\-]?\s*(.+?)\s*$",
-            re.I,
+        (
+            re.compile(
+                rf"\b(current{_WS}address|mailing{_WS}address|address)\b{_WS}[:\-]?\s*(.+?)\s*$",
+                re.I,
+            ),
         ),
     ),
 ]
@@ -87,6 +107,11 @@ def _query_kind(query: str) -> str | None:
     if not q:
         return None
     if re.search(r"\b(his|her|their)\s+name\b|\bwhat\s+is\s+(his|her|their)\s+name\b", q):
+        return "person_name"
+    if re.search(
+        r"\bwhat\s*(?:'s|is)\s+(?:the\s+)?(?:full\s+)?name\b|\bname\s+on\s+(?:file|record)\b",
+        q,
+    ):
         return "person_name"
     if re.search(
         r"\b(applicant|subject|borrower|customer|account holder|full|legal)\b.*\bname\b|\bapplicant name\b",
@@ -100,13 +125,38 @@ def _query_kind(query: str) -> str | None:
         q,
     ):
         return "loan_disbursed_amount"
-    if re.search(r"\b(e-?mail|email address)\b", q):
+    if re.search(r"\b(e-?mail(\s+address)?|email(\s+address)?)\b", q):
         return "email"
-    if re.search(r"\b(phone|mobile|contact number|cell)\b", q):
+    if re.search(r"\b(phone|phone number|mobile|contact number|contact|cell|telephone)\b", q):
         return "phone"
-    if re.search(r"\b(current\s+)?address\b|\bstreet address\b|\bmailing address\b", q):
+    if re.search(
+        r"\b(current\s+)?address\b|\bstreet address\b|\bmailing address\b|\bcurrent\s+address\b",
+        q,
+    ):
         return "address"
     return None
+
+
+_NEXT_FIELD_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9 /]{0,42}:\s*\S")
+
+
+def _merge_address_continuation(lines: list[str], start_i: int, first_line_value: str) -> str:
+    """Join obvious address wrap lines (PDF exports) until a new labeled field or limit."""
+    parts = [first_line_value.strip()]
+    total = len(first_line_value.strip())
+    max_lines = 4
+    max_chars = 240
+    i = start_i + 1
+    while i < len(lines) and len(parts) < max_lines and total < max_chars:
+        nxt = (lines[i] or "").strip()
+        if not nxt:
+            break
+        if _NEXT_FIELD_LINE.match(nxt):
+            break
+        parts.append(nxt)
+        total += len(nxt) + 1
+        i += 1
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()
 
 
 def try_extract_field_value_answer(query: str, hits: list[RetrievedChunk]) -> ExtractedAnswer | None:
@@ -117,105 +167,123 @@ def try_extract_field_value_answer(query: str, hits: list[RetrievedChunk]) -> Ex
     kind = _query_kind(query)
     if not kind or not hits:
         return None
-    pat = dict(_FIELD_PATTERNS).get(kind)
-    if pat is None:
+    pats = next((p for k, p in _FIELD_PATTERNS if k == kind), None)
+    if not pats:
         return None
 
     for idx, h in enumerate(hits, start=1):
         text = (h.page_content or "").strip()
         if not text:
             continue
-        # Scan line-by-line to avoid accidental cross-line joins.
-        for line in text.splitlines():
-            m = pat.search(line)
-            if not m:
-                continue
-            if kind == "loan_disbursed_amount":
-                amount = m.group(2)
-                return ExtractedAnswer(
-                    answer=f"Loan disbursed amount: {amount} [SOURCE {idx}]",
-                    used_source_numbers=(idx,),
-                )
-            if kind == "person_name":
-                name = m.group(2).strip()
-                # Avoid overly generic false positives.
-                parts = [p for p in name.split() if p]
-                if len(name) < 3 or len(parts) < 1:
+        lines = text.splitlines()
+        # Scan line-by-line to avoid accidental cross-line joins (except controlled address merge).
+        for li, line in enumerate(lines):
+            for pat in pats:
+                m = pat.search(line)
+                if not m:
                     continue
-                # Block obvious non-names that come from generic text (e.g. "or application number").
-                bad_tokens = {
-                    "or",
-                    "and",
-                    "number",
-                    "application",
-                    "loan",
-                    "amount",
-                    "date",
-                    "id",
-                    "no",
-                    "ref",
-                }
-                low_parts = {p.lower().strip(".") for p in parts}
-                if len(parts) >= 2 and (low_parts & bad_tokens):
-                    continue
-                if len(parts) >= 3 and sum(1 for p in parts if p.lower() in bad_tokens) >= 1:
-                    continue
-                return ExtractedAnswer(
-                    answer=f"Name on record: {name} [SOURCE {idx}]",
-                    used_source_numbers=(idx,),
-                )
-            if kind == "application_number":
-                app_no = m.group(3).strip()
-                return ExtractedAnswer(
-                    answer=f"Application number: {app_no} [SOURCE {idx}]",
-                    used_source_numbers=(idx,),
-                )
-            if kind == "email":
-                em = m.group(2).strip()
-                return ExtractedAnswer(
-                    answer=f"Email: {em} [SOURCE {idx}]",
-                    used_source_numbers=(idx,),
-                )
-            if kind == "phone":
-                raw_phone = re.sub(r"\s+", " ", m.group(3).strip())
-                if len(re.sub(r"\D", "", raw_phone)) < 10:
-                    continue
-                return ExtractedAnswer(
-                    answer=f"Contact number: {raw_phone} [SOURCE {idx}]",
-                    used_source_numbers=(idx,),
-                )
-            if kind == "address":
-                addr = m.group(2).strip()
-                addr = re.sub(r"\s+", " ", addr)
-                if len(addr) < 8 or len(addr) > 220:
-                    continue
-                low = addr.lower()
-                if not any(
-                    x in low
-                    for x in (
-                        "street",
-                        "st.",
-                        "road",
-                        "rd.",
-                        "avenue",
-                        "ave",
-                        "lane",
-                        "drive",
-                        "blvd",
-                        "suite",
-                        "unit",
-                        "apt",
-                        "city",
-                        "state",
-                        "zip",
-                        "pin",
+                if kind == "loan_disbursed_amount":
+                    amount = m.group(2)
+                    return ExtractedAnswer(
+                        answer=(
+                            f"According to the uploaded file [SOURCE {idx}], the loan disbursed amount is {amount}."
+                        ),
+                        used_source_numbers=(idx,),
                     )
-                ) and not any(ch.isdigit() for ch in addr):
-                    continue
-                return ExtractedAnswer(
-                    answer=f"Address on record: {addr} [SOURCE {idx}]",
-                    used_source_numbers=(idx,),
-                )
+                if kind == "person_name":
+                    name = (m.group(2) if (m.lastindex or 0) >= 2 else m.group(1)).strip()
+                    # Avoid overly generic false positives.
+                    parts = [p for p in name.split() if p]
+                    if len(name) < 3 or len(parts) < 1:
+                        continue
+                    # Plain "Name:" lines may be lowercase; still require a plausible person token shape.
+                    if (m.lastindex or 0) < 2:
+                        if not any(ch.isupper() for ch in name) and len(parts) < 2:
+                            continue
+                    # Block obvious non-names that come from generic text (e.g. "or application number").
+                    bad_tokens = {
+                        "or",
+                        "and",
+                        "number",
+                        "application",
+                        "loan",
+                        "amount",
+                        "date",
+                        "id",
+                        "no",
+                        "ref",
+                    }
+                    low_parts = {p.lower().strip(".") for p in parts}
+                    if len(parts) >= 2 and (low_parts & bad_tokens):
+                        continue
+                    if len(parts) >= 3 and sum(1 for p in parts if p.lower() in bad_tokens) >= 1:
+                        continue
+                    return ExtractedAnswer(
+                        answer=(
+                            f"The document states that the name on record is {name} [SOURCE {idx}]."
+                        ),
+                        used_source_numbers=(idx,),
+                    )
+                if kind == "application_number":
+                    app_no = m.group(3).strip()
+                    return ExtractedAnswer(
+                        answer=(
+                            f"According to the uploaded file [SOURCE {idx}], the application number is {app_no}."
+                        ),
+                        used_source_numbers=(idx,),
+                    )
+                if kind == "email":
+                    em = m.group(2).strip()
+                    return ExtractedAnswer(
+                        answer=(f"The document states that the email address is {em} [SOURCE {idx}]."),
+                        used_source_numbers=(idx,),
+                    )
+                if kind == "phone":
+                    raw_phone = re.sub(r"\s+", " ", m.group(2).strip())
+                    if len(re.sub(r"\D", "", raw_phone)) < 10:
+                        continue
+                    return ExtractedAnswer(
+                        answer=(
+                            f"According to the uploaded file [SOURCE {idx}], the phone / contact number is {raw_phone}."
+                        ),
+                        used_source_numbers=(idx,),
+                    )
+                if kind == "address":
+                    addr = m.group(2).strip()
+                    addr = _merge_address_continuation(lines, li, addr)
+                    addr = re.sub(r"\s+", " ", addr)
+                    if len(addr) < 8 or len(addr) > 260:
+                        continue
+                    low = addr.lower()
+                    if not any(
+                        x in low
+                        for x in (
+                            "street",
+                            "st.",
+                            "road",
+                            "rd.",
+                            "avenue",
+                            "ave",
+                            "lane",
+                            "drive",
+                            "blvd",
+                            "suite",
+                            "unit",
+                            "apt",
+                            "city",
+                            "state",
+                            "zip",
+                            "pin",
+                            "country",
+                            "p.o",
+                            "po box",
+                        )
+                    ) and not any(ch.isdigit() for ch in addr):
+                        continue
+                    return ExtractedAnswer(
+                        answer=(f"The document states that the address on record is: {addr} [SOURCE {idx}]."),
+                        used_source_numbers=(idx,),
+                    )
     return None
 
 
@@ -223,7 +291,8 @@ _METADATA_FILENAME_Q = re.compile(
     r"\b("
     r"file\s*name|filename|document\s*name|name\s+of\s+(the\s+)?(file|document)|"
     r"which\s+file|what\s+file|what\s+is\s+the\s+(file|document)|"
-    r"which\s+document|source\s+file"
+    r"which\s+document(\s+is\s+this)?|what\s+document(\s+is\s+this)?|"
+    r"source\s+file"
     r")\b",
     re.I,
 )

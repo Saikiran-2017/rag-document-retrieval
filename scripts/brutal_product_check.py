@@ -27,6 +27,10 @@ from pathlib import Path
 
 
 def main() -> int:
+    # Match eval harness: non-streaming turns populate ``text`` immediately (anchors check ``t.text``).
+    os.environ["KA_NO_STREAM"] = "1"
+    os.environ.setdefault("WEB_SEARCH_ENABLED", "0")
+
     from app.env_loader import is_openai_key_placeholder
     from app.services import index_service
     from app.services.chat_service import answer_user_query

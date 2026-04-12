@@ -32,6 +32,20 @@ _DOCUMENT_SCOPE = re.compile(
     re.I,
 )
 
+# Obvious structured-field asks (email/phone/address/name) must not take the no-retrieval general fast path.
+_STRUCTURED_FIELD_DOC_Q = re.compile(
+    r"("
+    r"\bwhat\s*(?:'s|is|was)\s+(?:the\s+)?(?:his|her|their|its|my|your|our)?\s*"
+    r"(?:e-?mail(?:\s+address)?|email(?:\s+address)?|phone(?:\s+number)?|contact(?:\s+number)?|mobile\b|"
+    r"(?:full\s+)?name\b|(?:current\s+)?address\b)\b"
+    r"|"
+    r"\b(?:his|her|their|its|my|your)\s+(?:e-?mail|email|phone|mobile|address|name)\b"
+    r"|"
+    r"\b(?:e-?mail|email|phone|contact|address)\s+(?:on\s+file|in\s+the\s+(?:file|document))\b"
+    r")",
+    re.I,
+)
+
 # Assistant / product identity — never treat as document-scoped (Phase M).
 _ASSISTANT_IDENTITY = re.compile(
     r"^\s*("
@@ -52,6 +66,9 @@ _GENERAL_ROLE_OR_CONCEPT = re.compile(
     r"(what\s+is\s+)?(an?\s+)?(ml|machine\s+learning)\s+engineer\b|"
     r"(what\s+is\s+)?(a\s+)?data\s+(engineer|scientist)\b|"
     r"(what\s+is\s+)?(a\s+)?machine\s+learning\s+engineer\b|"
+    r"(what\s+is\s+)?(an?\s+)?ml\b(?!\s+engineer)\b|"
+    r"(what\s+is\s+)?(a\s+)?machine\s+learning\b|"
+    r"machine\s+learning\b|"
     r"data\s+(engineer|scientist)\b|"
     r"(ml|machine\s+learning)\s+engineer\b"
     r")\s*[?.!]*\s*$",
@@ -107,6 +124,8 @@ def user_expects_document_grounding(query: str) -> bool:
         return False
     if should_bypass_document_intent_for_query(q):
         return False
+    if len(q) <= 160 and _STRUCTURED_FIELD_DOC_Q.search(q):
+        return True
     return bool(_DOCUMENT_SCOPE.search(q))
 
 
@@ -167,6 +186,7 @@ _ENTITY_LOOKUP_SAFE = re.compile(
     r"identifier\b|id\b|uuid\b|"
     r"serial\b|tracking\b|reference\b|ref\b"
     r"|applicant\b|application\s+number\b|disbursed\s+amount\b|loan\s+amount\b"
+    r"|e-?mail\b|email\b|phone\b|mobile\b|address\b|postal\b|zip\b"
     r")\b",
     re.I,
 )
@@ -192,7 +212,8 @@ def is_sparse_entity_lookup_query(query: str) -> bool:
     wh = bool(re.match(r"^\s*(who|what|when)\b", ql))
     ask = bool(
         re.search(
-            r"\b(name|named|id|identifier|uuid|date|owner|lead|manager|contact|applicant|application|loan|disbursed)\b",
+            r"\b(name|named|id|identifier|uuid|date|owner|lead|manager|contact|applicant|application|loan|disbursed|"
+            r"e-?mail|email|phone|mobile|address)\b",
             ql,
         )
     )
