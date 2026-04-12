@@ -365,16 +365,73 @@ _DOC_ABOUT_Q = re.compile(
     re.I,
 )
 
-_FIELD_LABEL = re.compile(
-    r"^\s*([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,6})\s*[:\-]\s*.+$"
+# Substrings in excerpt text mapped to short thematic phrases (meaning, not field layout).
+_OVERVIEW_TOPIC_TERMS: tuple[tuple[str, str], ...] = (
+    ("loan", "loan processing and obligations"),
+    ("applicant", "applicant details"),
+    ("repayment", "repayment terms"),
+    ("interest certificate", "interest documentation"),
+    ("interest", "interest and rates"),
+    ("disbursed", "disbursement amounts"),
+    ("application number", "application tracking"),
+    ("application", "application context"),
+    ("company", "company or organization background"),
+    ("role", "roles and responsibilities"),
+    ("contact", "contact and coordination details"),
+    ("email", "contact channels"),
+    ("phone", "contact channels"),
+    ("website", "web presence"),
+    ("spacex", "the organization profiled"),
+    ("starship", "launch vehicle programs"),
+    ("starlink", "connectivity initiatives"),
+    ("mars", "Mars and exploration goals"),
+    ("ceo", "leadership"),
+    ("chief engineer", "engineering leadership"),
+    ("engineer", "technical roles"),
+    ("employee", "workforce size and roles"),
+    ("mission", "mission and strategy"),
+    ("project", "projects and initiatives"),
+    ("product", "products and offerings"),
+    ("customer", "customers and accounts"),
+    ("revenue", "financial performance"),
+    ("contract", "contractual terms"),
+    ("policy", "policy content"),
 )
+
+
+def _overview_themes_from_blob(blob: str) -> list[str]:
+    low = blob.lower()
+    out: list[str] = []
+    seen: set[str] = set()
+    for key, label in _OVERVIEW_TOPIC_TERMS:
+        if key in low and label not in seen:
+            seen.add(label)
+            out.append(label)
+    return out[:6]
+
+
+def _overview_prose_sentences(text: str, *, limit: int = 8) -> list[str]:
+    flat = re.sub(r"\s+", " ", (text or "").strip())
+    if not flat:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", flat)
+    out: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if len(p) < 48 or len(p) > 560:
+            continue
+        if re.match(r"^[\w\s\-]{2,52}:\s*\S+$", p) and len(p) < 140:
+            continue
+        out.append(p)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk]) -> ExtractedAnswer | None:
     """
-    Deterministic fallback for broad "what is this document about?" questions when:
-    - retrieval selected a dominant document, and
-    - the excerpts expose obvious structure (field labels / section-ish lines).
+    Deterministic fallback for broad overview / summary questions when excerpts
+    cluster on a dominant source. Produces meaning-focused prose (not a field inventory).
     """
     qn = normalize_query_for_field_intent(query or "")
     if not hits or not _DOC_ABOUT_Q.search(qn):
@@ -388,67 +445,44 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
     if top_n < 3 and (top_n / max(len(srcs), 1)) < 0.6:
         return None
 
-    labels: list[str] = []
-    used_sources: list[int] = []
+    parts: list[str] = []
+    used_idx: list[int] = []
     for idx, h in enumerate(hits, start=1):
         if str(h.metadata.get("source_name") or "").strip() != top_src:
             continue
-        for line in (h.page_content or "").splitlines():
-            m = _FIELD_LABEL.match(line)
-            if not m:
-                continue
-            lab = m.group(1).strip()
-            # Filter out very short / noisy labels.
-            if len(lab) < 6:
-                continue
-            labels.append(lab)
-            used_sources.append(idx)
-            if len(labels) >= 10:
-                break
-        if len(labels) >= 10:
-            break
-
-    # Also accept "label-only" lines that look like UI field names (no colon),
-    # commonly seen in intranet screenshots extracted to text.
-    if len(labels) < 4:
-        for idx, h in enumerate(hits, start=1):
-            if str(h.metadata.get("source_name") or "").strip() != top_src:
-                continue
-            for line in (h.page_content or "").splitlines():
-                t = line.strip()
-                if not t or len(t) < 8 or len(t) > 64:
-                    continue
-                if re.match(r"^[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,6}$", t):
-                    labels.append(t)
-                    used_sources.append(idx)
-                    if len(labels) >= 10:
-                        break
-            if len(labels) >= 10:
-                break
-
-    uniq: list[str] = []
-    seen: set[str] = set()
-    for l in labels:
-        key = l.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq.append(l)
-        if len(uniq) >= 8:
-            break
-    if len(uniq) < 3:
+        t = (h.page_content or "").strip()
+        if t:
+            parts.append(t)
+            used_idx.append(idx)
+    blob = "\n".join(parts)
+    if len(blob.strip()) < 24:
         return None
 
-    # Cite up to 2 sources that contain label evidence (keep it minimal).
-    cite_sources = tuple(sorted(set(used_sources))[:2]) or (1,)
+    cite_sources = tuple(sorted(set(used_idx))[:2]) or (1,)
     cite_str = " ".join(f"[SOURCE {n}]" for n in cite_sources)
-    bullets = "\n".join(f"- {l}" for l in uniq[:8])
-    answer = (
-        f"This document appears to be a structured administrative record with labeled fields and sections {cite_str}.\n\n"
-        f"Key items it contains (from the retrieved excerpts):\n{bullets}\n\n"
-        f"{cite_str}"
-    ).strip()
-    return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
+
+    sents = _overview_prose_sentences(blob)
+    if len(sents) >= 2:
+        body = " ".join(sents[:3])
+        if len(body) > 900:
+            body = body[:897].rstrip() + "…"
+        answer = (
+            f"This document provides an overview of the material in the excerpts: {body} {cite_str}"
+        ).strip()
+        return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
+
+    themes = _overview_themes_from_blob(blob)
+    if len(themes) >= 2:
+        if len(themes) == 2:
+            theme_txt = f"{themes[0]} and {themes[1]}"
+        else:
+            theme_txt = ", ".join(themes[:-1]) + f", and {themes[-1]}"
+        answer = (
+            f"This document provides an overview of {theme_txt}, as reflected in the retrieved passages. {cite_str}"
+        ).strip()
+        return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
+
+    return None
 
 
 def try_answer_section_navigation_fallback(

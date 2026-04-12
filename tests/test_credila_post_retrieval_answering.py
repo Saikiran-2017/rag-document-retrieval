@@ -27,7 +27,9 @@ def test_credila_doc_about_deterministic_summary_when_structure_is_obvious() -> 
     assert out is not None
     low = out.answer.lower()
     assert "[source" in low
-    assert "structured" in low or "administrative" in low or "loan" in low
+    assert "provides an overview" in low
+    assert "structured administrative" not in low
+    assert "loan" in low or "applicant" in low or "repayment" in low
 
 
 def test_credila_how_much_is_my_loan_extracts_amount() -> None:

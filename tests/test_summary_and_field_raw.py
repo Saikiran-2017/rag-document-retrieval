@@ -97,6 +97,7 @@ def test_overview_on_summarize_query_with_hits() -> None:
     ]
     o = try_build_grounded_document_overview("summarize this document", hits)
     assert o is not None and "[source" in o.answer.lower()
+    assert "provides an overview" in o.answer.lower()
 
 
 def test_chunk_hit_extract_phone() -> None:

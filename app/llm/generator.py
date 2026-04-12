@@ -106,7 +106,7 @@ Rules:
 - If two Text passages contradict each other, say so briefly and cite both sources.
 - If the question asks for content not present in the Text lines, say so and use the unknown phrase above.
 - If the question names a specific person, company, product, or program (for example a CEO, employer, rocket program, or product name) and the Text does not state the requested fact, use the unknown phrase. Do not fill in with outside news, statistics, or general knowledge about that entity.
-- For overview, summary, main themes, or "what is this document about" questions, synthesize across all SOURCE blocks you were given; cite multiple [SOURCE n] when different sections support different parts of the answer.
+- For overview, summary, main themes, or "what is this document about" questions, synthesize substantive meaning from the Text (people, organizations, roles, goals, projects, products, timelines, outcomes) across all SOURCE blocks you were given. Do not answer with a catalogue of form field names, metadata labels, or generic claims that the file is only a "structured record" or "labeled form" unless the Text itself says so. Prefer an opening like "This document provides an overview of …" and cite multiple [SOURCE n] when different passages support different parts.
 - When CONTEXT includes multiple [SOURCE N] blocks and more than one is relevant, use more than one citation; do not answer from only the first block if other blocks clearly apply.
 - If the question targets a named section, heading topic, or a specific role/title (e.g. CFO), a single explicit sentence in the Text that states the fact is sufficient: answer briefly and cite that source. Do not abstain only because the passage is short, when it clearly names the section/topic or the person/role asked about.
 - If the question is extremely vague (e.g. "what is this", "explain this") and the Text does not clearly identify a single subject, either ask one short clarifying question or reply with the unknown phrase above—do not invent specifics.
@@ -299,6 +299,7 @@ def build_grounded_messages(
     *,
     n_context_sources: int = 1,
     section_navigation_query: bool = False,
+    broad_document_summary: bool = False,
 ) -> list[SystemMessage | HumanMessage]:
     """System + user messages for a single grounded completion."""
     synth = ""
@@ -306,6 +307,14 @@ def build_grounded_messages(
         synth = (
             "\nYou were given multiple SOURCE blocks. If the question is broad or spans topics, "
             "draw from every relevant block and cite each one you use (not only [SOURCE 1])."
+        )
+    summary_note = ""
+    if broad_document_summary and not section_navigation_query:
+        summary_note = (
+            "\nThis question asks for a summary or high-level overview. Write one cohesive answer (you may use a short opening "
+            'sentence such as "This document provides an overview of …"). Focus on real substance from the Text: '
+            "people, companies, roles, mission or purpose, major projects or products, and concrete facts. "
+            "Avoid inventorying form labels, empty field names, or describing the document only as a layout of boxes or tables."
         )
     section_note = ""
     if section_navigation_query:
@@ -334,10 +343,16 @@ def build_grounded_messages(
             "or topic (e.g. that section seven discusses disaster recovery) is a complete answer; "
             "quote or paraphrase it and cite. Do not reply with the unknown phrase when such a sentence exists."
         )
+    elif broad_document_summary:
+        system = (
+            f"{GROUNDING_SYSTEM_PROMPT}\n\n"
+            "For this turn, prioritize a readable narrative summary of what the excerpts convey about the subject matter, "
+            "not a description of document structure or field layout."
+        )
     user_body = (
         f"CONTEXT:\n{context_block}\n\n"
         f"QUESTION:\n{query.strip()}\n"
-        f"{section_note}\n\n"
+        f"{section_note}{summary_note}\n\n"
         f"{answer_rules}{synth}"
     )
     return [SystemMessage(content=system), HumanMessage(content=user_body)]
@@ -399,8 +414,8 @@ _DOCUMENT_TASK_MAX_TOKENS = 1200
 SUMMARIZE_SYSTEM_PROMPT = f"""You summarize text supplied only in [SOURCE N] blocks below. Evidence is ONLY the lines under "Text:" in each block.
 
 Output format (use Markdown):
-1. **Overview**: 2–4 sentences.
-2. **Key points**: bullet list (3–8 items when the material supports it).
+1. **Overview**: 2–4 sentences that explain what the material is about in plain language (who, what organization, roles, purpose, main initiatives or products, and any notable outcomes). Do not describe the file as a list of blank fields or a "structured form" unless the Text explicitly says that.
+2. **Key points**: bullet list (3–8 items when the material supports it); each bullet should capture meaning (facts, themes, decisions), not just label names.
 3. If the excerpts clearly do not cover the topic, say so in one short sentence (you may phrase like: {UNKNOWN_PHRASE}).
 
 Rules:
@@ -762,6 +777,7 @@ def stream_grounded_answer_tokens(
     *,
     chat_model: str = DEFAULT_CHAT_MODEL,
     section_navigation_query: bool = False,
+    broad_document_summary: bool = False,
 ) -> Iterator[str]:
     """Yield text tokens for Streamlit ``st.write_stream`` (document-grounded only)."""
     if not retrieved_chunks:
@@ -773,6 +789,7 @@ def stream_grounded_answer_tokens(
         context_block,
         n_context_sources=len(retrieved_chunks),
         section_navigation_query=section_navigation_query,
+        broad_document_summary=broad_document_summary,
     )
     model = create_chat_llm(
         model=chat_model,
@@ -865,6 +882,7 @@ def generate_grounded_answer(
     chat_model: str = DEFAULT_CHAT_MODEL,
     temperature: float = 0.0,
     section_navigation_query: bool = False,
+    broad_document_summary: bool = False,
 ) -> GroundedAnswer:
     """
     Produce an answer that uses only ``retrieved_chunks`` as evidence.
@@ -891,6 +909,7 @@ def generate_grounded_answer(
         context_block,
         n_context_sources=len(retrieved_chunks),
         section_navigation_query=section_navigation_query,
+        broad_document_summary=broad_document_summary,
     )
     model = llm or create_chat_llm(
         model=chat_model,

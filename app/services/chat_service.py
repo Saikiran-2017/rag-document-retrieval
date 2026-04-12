@@ -1024,7 +1024,10 @@ def _answer_user_query_impl(
 
                 def _gtok() -> Iterator[str]:
                     yield from stream_grounded_answer_tokens(
-                        query, hits, section_navigation_query=section_nav
+                        query,
+                        hits,
+                        section_navigation_query=section_nav,
+                        broad_document_summary=broad_overview,
                     )
 
                 return _finalize_answer(
@@ -1044,7 +1047,10 @@ def _answer_user_query_impl(
             try:
                 with timed_phase("generation"):
                     ga = generate_grounded_answer(
-                        query, hits, section_navigation_query=section_nav
+                        query,
+                        hits,
+                        section_navigation_query=section_nav,
+                        broad_document_summary=broad_overview,
                     )
             except Exception as exc:
                 if debug_service.debug_enabled():
