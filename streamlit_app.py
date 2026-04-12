@@ -828,11 +828,18 @@ st.markdown(
     .main [data-testid="element-container"]:has([data-testid="stChatInput"]) {
       margin-bottom: 0 !important;
       padding-bottom: 0 !important;
+      /* Streamlit chatInput can assign flex-grow on the widget shell; kill extra vertical flex space. */
+      flex: 0 0 auto !important;
+      min-height: 0 !important;
+      height: auto !important;
     }
     /* Inner Emotion layout shell (direct child of element-container): still carried bottom margin/padding. */
     .main [data-testid="element-container"]:has([data-testid="stChatInput"]) > div {
       margin-bottom: 0 !important;
       padding-bottom: 0 !important;
+      flex: 0 0 auto !important;
+      min-height: 0 !important;
+      height: auto !important;
     }
     /* Main column root under .block-container — only the subtree that contains the composer. */
     .main .block-container > div:has([data-testid="stChatInput"]) {
@@ -859,6 +866,12 @@ st.markdown(
       border-top: 1px solid var(--ka-line);
       margin-top: 0.35rem;
       background: linear-gradient(180deg, transparent 0%, var(--ka-app-bg-bot) 35%);
+    }
+    /* Outer composer node: do not stretch in column flex (avoids gradient/bg filling dead space below bar). */
+    .main div[data-testid="stChatInput"] {
+      flex: 0 0 auto !important;
+      min-height: 0 !important;
+      height: auto !important;
     }
     div[data-testid="stChatInput"] textarea {
       font-size: 0.97rem !important;
