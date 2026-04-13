@@ -467,7 +467,7 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
         if len(body) > 900:
             body = body[:897].rstrip() + "…"
         answer = (
-            f"This document provides an overview of the material in the excerpts: {body} {cite_str}"
+            f"{body} {cite_str}"
         ).strip()
         return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
 
@@ -478,7 +478,7 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
         else:
             theme_txt = ", ".join(themes[:-1]) + f", and {themes[-1]}"
         answer = (
-            f"This document provides an overview of {theme_txt}, as reflected in the retrieved passages. {cite_str}"
+            f"It provides an overview of {theme_txt}. {cite_str}"
         ).strip()
         return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
 
