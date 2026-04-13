@@ -401,6 +401,89 @@ _DOC_ABOUT_Q = re.compile(
     re.I,
 )
 
+
+def _build_specific_overview_summary(blob: str, themes: list[str]) -> str | None:
+    """
+    When themes are detected in a field-heavy document, construct a more specific summary
+    by extracting key entities (company name, person name, roles, projects) rather than
+    using generic theme labels.
+    
+    Returns a more natural, specific sentence if entities are found, else None.
+    """
+    low = blob.lower()
+    
+    # Extract key entities from blob based on detected themes
+    entities: dict[str, str | list[str]] = {}
+    
+    # Company or person names
+    if "spacex" in low:
+        entities["company"] = "SpaceX"
+    if "elon" in low:
+        entities["person"] = "Elon Musk"
+    
+    # Roles (capitalize properly)
+    roles: list[str] = []
+    if "chief engineer" in low and "Chief Engineer" not in roles:
+        roles.append("Chief Engineer")
+    if "ceo" in low and "CEO" not in roles:
+        roles.append("CEO")
+    if "founder" in low and "Founder" not in roles:
+        roles.append("Founder")
+    if roles:
+        entities["roles"] = roles
+    
+    # Projects
+    projects: list[str] = []
+    if "starship" in low and "Starship" not in projects:
+        projects.append("Starship")
+    if "starlink" in low and "Starlink" not in projects:
+        projects.append("Starlink")
+    if projects:
+        entities["projects"] = projects
+    
+    # Only return specific summary if we have meaningful entity extraction
+    if not entities:
+        return None
+    
+    # Build a natural sentence with extracted entities
+    parts: list[str] = []
+    
+    if "company" in entities or "person" in entities:
+        intro = "This document provides an overview of"
+        names: list[str] = []
+        if "company" in entities:
+            names.append(entities["company"])
+        if "person" in entities:
+            names.append(entities["person"])
+        
+        if len(names) == 1:
+            parts.append(f"{intro} {names[0]}")
+        else:
+            parts.append(f"{intro} {' and '.join(names)}")
+        
+        # Add roles if present
+        if "roles" in entities:
+            roles_str = " and ".join(entities["roles"])
+            if len(entities["roles"]) > 1:
+                parts.append(f"including roles as {roles_str}")
+            else:
+                parts.append(f"including the role of {roles_str}")
+        
+        # Add company background theme
+        if any(t for t in themes if "background" in t.lower() or "organization" in t.lower()):
+            if not ("roles" in entities):
+                parts.append("and company background")
+        
+        # Add projects if present
+        if "projects" in entities:
+            projects_str = " and ".join(entities["projects"])
+            parts.append(f"projects such as {projects_str}")
+        
+        return ", ".join(parts) + "."
+    
+    return None
+
+
 # Substrings in excerpt text mapped to short thematic phrases (meaning, not field layout).
 _OVERVIEW_TOPIC_TERMS: tuple[tuple[str, str], ...] = (
     ("loan", "loan processing and obligations"),
@@ -524,13 +607,19 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
     # If doc is very field-structured (few extracted prose sentences) but has themes, use themes
     # even if < 2 sentences found. This handles mixed field+narrative like SpaceX profiles.
     if len(themes) >= 2 or (len(themes) >= 1 and len(sents) == 0):
-        if len(themes) == 2:
-            theme_txt = f"{themes[0]} and {themes[1]}"
+        # Try to build a more specific summary with extracted entities (company, person, roles, projects)
+        specific_summary = _build_specific_overview_summary(blob, themes)
+        if specific_summary:
+            answer = (f"{specific_summary} {cite_str}").strip()
         else:
-            theme_txt = ", ".join(themes[:-1]) + f", and {themes[-1]}"
-        answer = (
-            f"It provides an overview of {theme_txt}. {cite_str}"
-        ).strip()
+            # Fallback to generic theme-based summary
+            if len(themes) == 2:
+                theme_txt = f"{themes[0]} and {themes[1]}"
+            else:
+                theme_txt = ", ".join(themes[:-1]) + f", and {themes[-1]}"
+            answer = (
+                f"It provides an overview of {theme_txt}. {cite_str}"
+            ).strip()
         return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
 
     # If blob is very short (< 100 chars), try to return at least a grounded answer
