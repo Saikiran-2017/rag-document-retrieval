@@ -80,6 +80,17 @@ _FIELD_PATTERNS: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
                 rf"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})\b",
                 re.I,
             ),
+            # Support "Contact: email" patterns (contact as generic label)
+            re.compile(
+                rf"\b(contact)\b{_WS}[:\-]?\s*"
+                rf"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})\b",
+                re.I,
+            ),
+            # Label-only pattern for multi-line cases (e.g., "Email:" on one line, value on next)
+            re.compile(
+                rf"^\s*(e-?mail|email)\s*[:\-]\s*$",
+                re.I,
+            ),
         ),
     ),
     (
@@ -88,6 +99,11 @@ _FIELD_PATTERNS: list[tuple[str, tuple[re.Pattern[str], ...]]] = [
             re.compile(
                 rf"\b(contact{_WS}number|phone{_WS}number|contact|phone|mobile|cell|tel\.?)\b{_WS}[:\-]?\s*"
                 rf"([\d()+\-\s]{{10,24}})\b",
+                re.I,
+            ),
+            # Label-only pattern for multi-line cases (e.g., "Phone:" on one line, number on next)
+            re.compile(
+                rf"^\s*(phone|contact|mobile|cell)\s*[:\-]\s*$",
                 re.I,
             ),
         ),
@@ -201,6 +217,26 @@ def try_extract_field_value_answer(query: str, hits: list[RetrievedChunk]) -> Ex
                 m = pat.search(line)
                 if not m:
                     continue
+                
+                # Handle label-only patterns (when value is on next line)
+                # For email/phone, if we matched just a label with no value, check next line
+                if kind == "email" and m.lastindex == 1 and li + 1 < len(lines):
+                    next_line = lines[li + 1].strip()
+                    if re.match(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", next_line):
+                        return ExtractedAnswer(
+                            answer=f"The document states that the email address is {next_line} [SOURCE {idx}].",
+                            used_source_numbers=(idx,),
+                        )
+                elif kind == "phone" and m.lastindex == 1 and li + 1 < len(lines):
+                    next_line = lines[li + 1].strip()
+                    if re.match(r"^[\d()+\-\s]{10,24}$", next_line):
+                        raw_phone = re.sub(r"\s+", " ", next_line)
+                        if len(re.sub(r"\D", "", raw_phone)) >= 10:
+                            return ExtractedAnswer(
+                                answer=f"According to the uploaded file [SOURCE {idx}], the phone / contact number is {raw_phone}.",
+                                used_source_numbers=(idx,),
+                            )
+                
                 if kind == "loan_disbursed_amount":
                     amount = m.group(2)
                     return ExtractedAnswer(
@@ -411,6 +447,11 @@ def _overview_themes_from_blob(blob: str) -> list[str]:
 
 
 def _overview_prose_sentences(text: str, *, limit: int = 8) -> list[str]:
+    """Extract meaningful prose sentences, filtering field-like patterns.
+    
+    Enhanced to better filter field labels even in reflowed text, and reject
+    documents that are predominantly field-structured rather than prose.
+    """
     flat = re.sub(r"\s+", " ", (text or "").strip())
     if not flat:
         return []
@@ -420,7 +461,13 @@ def _overview_prose_sentences(text: str, *, limit: int = 8) -> list[str]:
         p = p.strip()
         if len(p) < 48 or len(p) > 560:
             continue
+        # Filter field-like patterns: "Label: value", "Full Name: John", etc.
         if re.match(r"^[\w\s\-]{2,52}:\s*\S+$", p) and len(p) < 140:
+            continue
+        # Also reject sentences that start with multiple field-like pattern indicators
+        # (e.g., many colons suggest a field dump)
+        colon_count = p.count(":")
+        if colon_count > 2:
             continue
         out.append(p)
         if len(out) >= limit:
@@ -471,8 +518,12 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
         ).strip()
         return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
 
+    # For field-heavy docs (prose extraction failed), try theme-based summary.
+    # This preserves structured doc behavior: loans, forms, etc.
     themes = _overview_themes_from_blob(blob)
-    if len(themes) >= 2:
+    # If doc is very field-structured (few extracted prose sentences) but has themes, use themes
+    # even if < 2 sentences found. This handles mixed field+narrative like SpaceX profiles.
+    if len(themes) >= 2 or (len(themes) >= 1 and len(sents) == 0):
         if len(themes) == 2:
             theme_txt = f"{themes[0]} and {themes[1]}"
         else:
@@ -482,6 +533,13 @@ def try_build_grounded_document_overview(query: str, hits: list[RetrievedChunk])
         ).strip()
         return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
 
+    # If blob is very short (< 100 chars), try to return at least a grounded answer
+    # from raw content rather than silently failing
+    if len(blob.strip()) > 0 and len(blob.strip()) <= 100:
+        trimmed = blob.strip()[:97] + ("…" if len(blob.strip()) > 97 else "")
+        answer = (f"{trimmed} {cite_str}").strip()
+        return ExtractedAnswer(answer=answer, used_source_numbers=cite_sources)
+    
     return None
 
 

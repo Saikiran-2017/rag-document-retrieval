@@ -24,6 +24,8 @@ _PHRASE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
     (r"(?i)\bsummarize\s+this\s*$", "summarize this document"),
     (r"\bsummarise\b", "summarize"),
     (r"\bsumarize\b", "summarize"),
+    # Support "what is this/document/file about" as summary variant
+    (r"(?i)\b(what|help me understand)\s+(?:is\s+)?(?:this|the)(?:\s+document|\s+file)?\s+about\b", "summarize this document"),
     (r"\bsumary\b", "summary"),
     (r"\bsmmary\b", "summary"),
     (r"\bexplian\b", "explain"),
