@@ -75,9 +75,12 @@ data/raw/*
 !data/raw/sample_phase2.txt
 data/indexes/*
 !data/indexes/.gitkeep
+data/_docker_http_transcript_report.json
+data/chat_history.db
 
-# Eval harness temp index
+# Eval harness temp index and smoke work directories
 eval/_work/
+eval/_phase*_work/
 eval/_report*.json
 
 # Playwright / web E2E (if generated at repo root)
