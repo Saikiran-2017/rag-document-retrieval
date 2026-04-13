@@ -1,5 +1,0 @@
-# Reliability Brief
-
-CFO name on record: Maria Chen.
-
-Section 7 discusses disaster recovery.

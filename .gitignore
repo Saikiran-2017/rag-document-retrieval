@@ -14,7 +14,15 @@ env/
 
 private_docs/
 
-# Local eval console capture and ad-hoc logs (never commit)
+# Generated audit and report markdown files (local-only)
+PRODUCT_FIXES_REPORT.md
+FINAL_VALIDATION_REPORT.md
+PRODUCT_ROBUSTNESS_AUDIT.md
+
+# Generated evaluation reports and logs (local-only)
+eval/_report_*.json
+eval/_phase20f_stdout.txt
+eval/_transcript_gate_report.json
 eval/_stdout*.txt
 eval/_phase20f*.txt
 eval/*_stderr.txt
@@ -26,6 +34,12 @@ eval/**/*.faiss
 eval/**/*.pkl
 eval/**/index_library_state.json
 eval/**/document_manifest.json
+
+# Phase-specific and one-off validation scripts (local development only)
+scripts/phase27_product_smoke.py
+scripts/phase28_real_docs_pack.py
+scripts/manual_product_validation.py
+scripts/transcript_product_gate.py
 
 # Python
 __pycache__/
