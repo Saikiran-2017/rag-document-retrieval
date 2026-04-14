@@ -1,0 +1,10 @@
+Sample Phase 2 Document
+
+This is a small tracked sample file for fresh clones and CI smoke checks.
+It is safe to keep in git because it contains no private data.
+
+Key facts:
+- Company: Acme Corp
+- Contact email: ops@acme.example
+- Summary: This document is a short placeholder used to verify upload/sync/index paths.
+
