@@ -35,11 +35,8 @@ eval/**/*.pkl
 eval/**/index_library_state.json
 eval/**/document_manifest.json
 
-# Phase-specific and one-off validation scripts (local development only)
-scripts/phase27_product_smoke.py
-scripts/phase28_real_docs_pack.py
-scripts/manual_product_validation.py
-scripts/transcript_product_gate.py
+# Phase-specific scripts:
+# Keep these tracked if README references them; ignore only truly local scripts.
 
 # Python
 __pycache__/

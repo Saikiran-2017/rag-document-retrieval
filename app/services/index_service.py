@@ -210,14 +210,33 @@ def rebuild_knowledge_index(
     except Exception as exc:
         msg = str(exc) or MSG_SERVICE_UNAVAILABLE
         document_manifest.mark_index_failure(faiss_folder, msg)
+        logger.error(
+            "sync_aborted: embeddings_client_failed exc_type=%s cwd=%s raw_dir=%s faiss_dir=%s detail=%s",
+            type(exc).__name__,
+            os.getcwd(),
+            raw_dir.resolve(),
+            faiss_folder.resolve(),
+            msg,
+            exc_info=True,
+        )
         return False, msg, 0, "failed"
     cache_root = cache_dir_for(faiss_folder, model)
 
     try:
         content_fp = library_content_fingerprint(raw_dir)
         if not content_fp:
-            document_manifest.mark_index_failure(faiss_folder, MSG_PREPARE_DOCS_FAILED)
-            return False, MSG_PREPARE_DOCS_FAILED, 0, "failed"
+            n_raw_files = (
+                sum(1 for p in raw_dir.iterdir() if p.is_file()) if raw_dir.is_dir() else 0
+            )
+            logger.error(
+                "sync_aborted: empty_library_no_supported_files raw_dir=%s cwd=%s "
+                "files_in_raw_dir=%s (expect .pdf .docx .txt)",
+                raw_dir.resolve(),
+                os.getcwd(),
+                n_raw_files,
+            )
+            document_manifest.mark_index_failure(faiss_folder, MSG_NO_DOCS)
+            return False, MSG_NO_DOCS, 0, "failed"
 
         current_hashes = dict(content_fp)
         state = index_library_state.load_state(faiss_folder)
@@ -320,6 +339,16 @@ def rebuild_knowledge_index(
             final_documents.extend(chunks_to_documents(chunks))
 
         if not final_documents:
+            fb_log = {
+                name: {k: fb[k] for k in ("ok", "reason") if k in fb}
+                for name, fb in file_build.items()
+            }
+            logger.error(
+                "sync_aborted: no_chunks_produced raw_dir=%s cwd=%s file_build=%s",
+                raw_dir.resolve(),
+                os.getcwd(),
+                fb_log,
+            )
             document_manifest.apply_post_index_validation(
                 faiss_folder,
                 file_build=file_build,
@@ -373,7 +402,12 @@ def rebuild_knowledge_index(
         return True, "", nvec, "rebuilt"
     except Exception as exc:
         document_manifest.mark_index_failure(faiss_folder, str(exc))
-        logger.exception("Index rebuild failed")
+        logger.exception(
+            "sync_aborted: index_rebuild_unhandled raw_dir=%s faiss_dir=%s cwd=%s",
+            raw_dir.resolve(),
+            faiss_folder.resolve(),
+            os.getcwd(),
+        )
         return False, MSG_PREPARE_DOCS_FAILED, 0, "failed"
 
 
