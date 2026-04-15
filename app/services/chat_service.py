@@ -34,7 +34,6 @@ from app.llm.conversation_context import (
 )
 from app.llm.deterministic_extraction import (
     field_value_question_kind,
-    try_extract_contact_info_bundle_answer,
     try_answer_document_metadata_question,
     try_answer_section_navigation_fallback,
     try_build_grounded_document_overview,
@@ -1044,28 +1043,6 @@ def _answer_user_query_impl(
                     **common_diag,
                 )
             # Deterministic extraction for obvious field/value queries (prevents false refusals).
-            bundle = try_extract_contact_info_bundle_answer(query, hits)
-            if bundle is not None:
-                fixed_b, warn_b = validate_grounded_answer(bundle.answer, hits, unknown_phrase=UNKNOWN_PHRASE)
-                ga_b = GroundedAnswer(
-                    answer=fixed_b,
-                    sources=chunks_to_source_refs(hits),
-                    validation_warning=warn_b,
-                )
-                return _finalize_answer(
-                    AssistantTurn(
-                        mode="grounded",
-                        text=ga_b.answer,
-                        grounded=ga_b,
-                        hits=hits,
-                        assistant_note=ga_b.validation_warning,
-                    ),
-                    routing="grounded_deterministic_contact_bundle",
-                    retrieval_ran=True,
-                    retrieval_hit_count=len(hits),
-                    fallback_to_general=False,
-                    **common_diag,
-                )
             extracted = try_extract_field_value_answer(query, hits)
             if extracted is None and _field_kind is not None:
                 rb = try_extract_field_from_raw_library(
