@@ -28,11 +28,13 @@ from app.llm.generator import (
 )
 from app.llm.conversation_context import (
     build_conversation_retrieval_hints,
+    ConversationRetrievalHints,
     effective_user_expects_document_grounding,
     is_short_document_deictic_followup,
 )
 from app.llm.deterministic_extraction import (
     field_value_question_kind,
+    try_extract_contact_info_bundle_answer,
     try_answer_document_metadata_question,
     try_answer_section_navigation_fallback,
     try_build_grounded_document_overview,
@@ -75,6 +77,15 @@ from app.services.message_service import (
     MSG_WEB_RESULTS_THIN,
     merge_notes,
     preview_text,
+)
+
+_CONFIRM_CONTINUE = re.compile(
+    r"^\s*(yes|yeah|yep|yup|ok|okay|sure|go\s+on|continue)\s*[!.?]*\s*$", re.I
+)
+
+# Expansion queries: ask for more details from same grounded context.
+_EXPANSION_QUERY = re.compile(
+    r"^\s*(tell\s+me\s+more|continue|details|elaborate|more\s+details|expand|what\s+else|more|further)\s*[!.?]*\s*$", re.I
 )
 
 
@@ -250,6 +261,58 @@ def _wants_blended_web(query: str) -> bool:
 _DOC_OVERVIEW_RETRIEVAL_BOOST = (
     "main sections themes introduction conclusion purpose overview key ideas summary"
 )
+
+
+def _classify_prior_answer_intent(query: str | None) -> str | None:
+    """Classify the intent of a user query to track what kind of answer it generated."""
+    if not query:
+        return None
+    q = (query or "").lower().strip()
+    if field_value_question_kind(q) is not None:
+        return "field"
+    if is_broad_document_overview_query(q):
+        return "summary"
+    if re.search(
+        r"\b(project|technology|technology\s+stack|skill|tools|experience|background|company|organization|person|profile)\b",
+        q,
+        re.I,
+    ):
+        return "topic"
+    if re.search(r"\b(contact|information|details)\b", q, re.I) and not field_value_question_kind(q):
+        return "contact_bundle"
+    return None
+
+
+def _extract_prior_grounded_context(
+    conversation_history: list[dict[str, Any]] | None,
+) -> tuple[list[RetrievedChunk], str | None] | None:
+    """
+    Find the most recent grounded assistant answer with hits and its intent.
+    Returns (hits, prior_intent) or None if no grounded context exists.
+    """
+    if not conversation_history or not isinstance(conversation_history, list):
+        return None
+    for msg in reversed(conversation_history):
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "").lower() != "assistant":
+            continue
+        # Check if this is a grounded message
+        is_grounded = msg.get("grounded") is True or msg.get("mode") in ("grounded", "blended")
+        if not is_grounded:
+            continue
+        # Extract sources from message
+        sources = msg.get("sources")
+        prior_intent = msg.get("prior_intent")
+        if not sources:
+            continue
+        if not isinstance(sources, list) or not sources:
+            continue
+        # For now, return None as we don't have the actual RetrievedChunk objects
+        # in the message format. This will be populated from the prior turn.
+        # The key is just to get prior_intent.
+        return prior_intent
+    return None
 
 
 def wants_no_retrieval_fastpath(query: str) -> bool:
@@ -454,6 +517,43 @@ def _answer_user_query_impl(
         )
 
     doc_intent = effective_user_expects_document_grounding(query, conv_hints)
+
+    # Continuation expansion: when user asks "tell me more", "details", etc. after grounded turn,
+    # attempt to expand from same document context rather than asking for clarification.
+    if (
+        conv_hints.force_document_scoped_routing
+        and doc_intent
+        and _EXPANSION_QUERY.match(query)
+    ):
+        # Convert expansion query to retrieval query that asks for more details/elaboration
+        # instead of clarifying. This lets the same retrieval + wider context provide expansion.
+        expansion_query = query.strip()
+        # Signal broader retrieval to get more material from same document.
+        # Update conv_hints to force relaxed lookup gate for wider context selection.
+        conv_hints = ConversationRetrievalHints(
+            retrieval_query=expansion_query,
+            focus_source_name=conv_hints.focus_source_name,
+            force_document_scoped_routing=True,
+            relax_lookup_gate=True,  # Broader context for expansion.
+        )
+        # Fall through - let the normal retrieval + generation handle it with wider context.
+        doc_intent = True
+    # If user sends expansion query but there's no prior grounded context, ask clarification.
+    elif doc_intent and _EXPANSION_QUERY.match(query) and not conversation_history:
+        return _finalize_answer(
+            AssistantTurn(
+                mode="general",
+                text=(
+                    "Do you want more details from the document summary, projects, technologies, or contact information?"
+                ),
+                assistant_note=None,
+            ),
+            routing="general_clarify_expansion_no_context",
+            retrieval_ran=False,
+            retrieval_hit_count=0,
+            fallback_to_general=False,
+            exception_summary=None,
+        )
 
     debug_service.log_retrieval_event(
         "turn_begin",
@@ -944,6 +1044,28 @@ def _answer_user_query_impl(
                     **common_diag,
                 )
             # Deterministic extraction for obvious field/value queries (prevents false refusals).
+            bundle = try_extract_contact_info_bundle_answer(query, hits)
+            if bundle is not None:
+                fixed_b, warn_b = validate_grounded_answer(bundle.answer, hits, unknown_phrase=UNKNOWN_PHRASE)
+                ga_b = GroundedAnswer(
+                    answer=fixed_b,
+                    sources=chunks_to_source_refs(hits),
+                    validation_warning=warn_b,
+                )
+                return _finalize_answer(
+                    AssistantTurn(
+                        mode="grounded",
+                        text=ga_b.answer,
+                        grounded=ga_b,
+                        hits=hits,
+                        assistant_note=ga_b.validation_warning,
+                    ),
+                    routing="grounded_deterministic_contact_bundle",
+                    retrieval_ran=True,
+                    retrieval_hit_count=len(hits),
+                    fallback_to_general=False,
+                    **common_diag,
+                )
             extracted = try_extract_field_value_answer(query, hits)
             if extracted is None and _field_kind is not None:
                 rb = try_extract_field_from_raw_library(

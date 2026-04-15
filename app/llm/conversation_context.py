@@ -46,6 +46,15 @@ _FOLLOW_DOC_DEICTIC = re.compile(
     r"|\b(in|from)\s+the\s+file\b",
     re.I,
 )
+_FOLLOW_CONFIRM = re.compile(r"^\s*(yes|yeah|yep|yup|ok|okay|sure)\s*[!.?]*\s*$", re.I)
+_FOLLOW_BARE_FIELD = re.compile(
+    r"^\s*("
+    r"phone(\s+number)?|contact(\s+number)?|mobile|cell|"
+    r"email|e-?mail(\s+address)?|address|website|url|"
+    r"headquarters|headquartered|hq|founded|established|incorporated"
+    r")\s*[!.?]*\s*$",
+    re.I,
+)
 _FOLLOW_WH_START = re.compile(
     r"^\s*(what|who|when|where|which|how|did|does|do|is|are|was|were|can|could|would)\b",
     re.I,
@@ -169,11 +178,24 @@ def _looks_like_doc_followup(query: str) -> bool:
         return False
     if _GENERAL_TECH.search(q):
         return False
+    # Expansion queries: tell me more, continue, details, elaborate, etc.
+    if re.search(
+        r"^\s*(tell\s+me\s+more|continue|details|elaborate|more\s+details|expand|what\s+else|more|further)\s*[!.?]*\s*$",
+        q,
+        re.I,
+    ):
+        return True
     if _FOLLOW_PRONOUN.search(q):
         return True
     if _FOLLOW_SUBJECT_AUX.search(q):
         return True
     if _FOLLOW_DOC_DEICTIC.search(q):
+        return True
+    # Ultra-short recoveries after a grounded turn: treat as doc-scoped only when
+    # conversation context already provides a dominant library source.
+    if _FOLLOW_CONFIRM.search(q):
+        return True
+    if _FOLLOW_BARE_FIELD.search(q):
         return True
     if _METADATA_Q.search(q):
         return True
