@@ -21,6 +21,18 @@ def _collapse_ws(s: str) -> str:
 
 # (pattern, replacement) — applied in order with case-insensitive matching.
 _PHRASE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
+    # Normalize continuation field queries (expand "phone" to "phone number" first)
+    (r"(?i)^and\s+phone\s*$", "what is the phone number"),
+    (r"(?i)^and\s+phone\s+number\s*$", "what is the phone number"),
+    (r"(?i)^and\s+website\s*$", "what is the website"),
+    (r"(?i)^and\s+email\s*$", "what is the email"),
+    (r"(?i)^and\s+address\s*$", "what is the address"),
+    (r"(?i)^and\s+name\s*$", "what is the name"),
+    (r"(?i)^what\s+about\s+phone\s*$", "what is the phone number"),
+    (r"(?i)^what\s+about\s+website\s*$", "what is the website"),
+    (r"(?i)^what\s+about\s+email\s*$", "what is the email"),
+    (r"(?i)^what\s+about\s+address\s*$", "what is the address"),
+    (r"(?i)^what\s+about\s+name\s*$", "what is the name"),
     (r"(?i)\bsummarize\s+this\s*$", "summarize this document"),
     (r"\bsummarise\b", "summarize"),
     (r"\bsumarize\b", "summarize"),
