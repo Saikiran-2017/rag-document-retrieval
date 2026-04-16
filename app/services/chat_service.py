@@ -675,12 +675,16 @@ def _answer_user_query_impl(
     relaxed_doc_gate = uses_relaxed_document_grounding_gate(query) or conv_hints.relax_lookup_gate
     section_nav = is_section_navigation_query(query)
     _field_kind = field_value_question_kind(query)
+    # For continuation queries with focused document context (force_document_scoped_routing),
+    # relax lookup gating to allow bundle extraction with weak retrieval hits.
+    # This supports "details", "contact info", etc. after field lookup.
     lookup_relaxed = (
         is_sparse_entity_lookup_query(query)
         or conv_hints.relax_lookup_gate
         or (_field_kind is not None)
+        or (conv_hints.force_document_scoped_routing and conv_hints.focus_source_name)
     )
-    wide_retrieval = broad_overview or relaxed_doc_gate or section_nav or conv_hints.relax_lookup_gate
+    wide_retrieval = broad_overview or relaxed_doc_gate or section_nav or conv_hints.relax_lookup_gate or lookup_relaxed
     if wide_retrieval:
         k_pool = min(nvec, max(base_pool, 22))
         kv = min(nvec, max(32, min(48, nvec)))
