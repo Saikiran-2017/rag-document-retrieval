@@ -744,5 +744,178 @@ def try_extract_field_from_raw_library(
     return None
 
 
+def try_extract_contact_info_bundle_answer(query: str, hits: list[RetrievedChunk]) -> ExtractedAnswer | None:
+    """
+    When query implies contact details / contact info after a field lookup,
+    extract ALL available contact fields (email, phone, website, address) deterministically.
+    
+    Only return grouped bundle when:
+    - Query implies "details" / "contact" / "more info"
+    - At least 2 contact fields are found with high confidence
+    - All extracted fields have clear citations
+    """
+    if not hits:
+        return None
+    
+    # Detect if query is asking for contact details / bundle
+    q = (query or "").strip().lower()
+    is_contact_details = bool(
+        re.search(
+            r"(details|contact|more\s+info|information|more\s+information|what\s+else|other\s+details)",
+            q,
+        )
+    )
+    if not is_contact_details:
+        return None
+    
+    # Extract individual fields in order of appearance across all hits
+    fields: dict[str, tuple[str, int]] = {}  # field_type -> (value, source_idx)
+    
+    for idx, h in enumerate(hits, start=1):
+        text = (h.page_content or "").strip()
+        if not text:
+            continue
+        
+        lines = text.splitlines()
+        
+        # Extract email
+        if "email" not in fields:
+            for line in lines:
+                m = re.search(
+                    rf"(e-?mail|email)\s*[:\-]?\s*"
+                    rf"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}})",
+                    line,
+                    re.I,
+                )
+                if m:
+                    fields["email"] = (m.group(2).strip(), idx)
+                    break
+        
+        # Extract phone - try multiple patterns
+        if "phone" not in fields:
+            for line in lines:
+                # Pattern 1: Label + number
+                m = re.search(
+                    rf"(phone|contact|mobile|cell|tel\.?)\s*[:\-]?\s*"
+                    rf"([\d()+\-\s]{{10,24}})",
+                    line,
+                    re.I,
+                )
+                if m:
+                    raw_phone = re.sub(r"\s+", " ", m.group(2).strip())
+                    if len(re.sub(r"\D", "", raw_phone)) >= 10:
+                        fields["phone"] = (raw_phone, idx)
+                        break
+                
+                # Pattern 2: Just number pattern (e.g., "555-1234" or "(555) 123-4567")
+                if not m:
+                    m = re.search(
+                        rf"^[:\-]?\s*([\d()+\-\s]{{10,24}})\s*$",
+                        line.strip(),
+                    )
+                    if m:
+                        raw_phone = re.sub(r"\s+", " ", m.group(1).strip())
+                        if len(re.sub(r"\D", "", raw_phone)) >= 10:
+                            fields["phone"] = (raw_phone, idx)
+                            break
+        
+        # Extract website
+        if "website" not in fields:
+            for line in lines:
+                m = re.search(
+                    rf"(website|url)\s*[:\-]?\s*"
+                    rf"((?:https?://|www\.)[A-Za-z0-9._~/?#=\-]+)",
+                    line,
+                    re.I,
+                )
+                if not m:
+                    m = re.search(
+                        rf"(website|url)\s*[:\-]?\s*"
+                        rf"([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]{1,24})+\.(?:com|net|org|io|edu|gov))",
+                        line,
+                        re.I,
+                    )
+                if m:
+                    fields["website"] = (m.group(2).strip(), idx)
+                    break
+        
+        # Extract address
+        if "address" not in fields:
+            for li, line in enumerate(lines):
+                m = re.search(
+                    rf"(address|location)\s*[:\-]?\s*(.+?)\s*$",
+                    line,
+                    re.I,
+                )
+                if m:
+                    addr = m.group(2).strip()
+                    addr = _merge_address_continuation(lines, li, addr)
+                    addr = re.sub(r"\s+", " ", addr)
+                    if 8 <= len(addr) <= 260:
+                        low = addr.lower()
+                        if any(
+                            x in low
+                            for x in (
+                                "street",
+                                "st.",
+                                "road",
+                                "rd.",
+                                "avenue",
+                                "ave",
+                                "lane",
+                                "drive",
+                                "blvd",
+                                "suite",
+                                "unit",
+                                "apt",
+                                "city",
+                                "state",
+                                "zip",
+                                "pin",
+                                "country",
+                                "p.o",
+                                "po box",
+                            )
+                        ) or any(ch.isdigit() for ch in addr):
+                            fields["address"] = (addr, idx)
+                            break
+    
+    # Only return if at least 2 fields found
+    if len(fields) < 2:
+        return None
+    
+    # Build grouped response with citations
+    parts: list[str] = []
+    used_sources: set[int] = set()
+    
+    if "email" in fields:
+        email, src = fields["email"]
+        parts.append(f"**Email**: {email} [SOURCE {src}]")
+        used_sources.add(src)
+    
+    if "phone" in fields:
+        phone, src = fields["phone"]
+        parts.append(f"**Phone**: {phone} [SOURCE {src}]")
+        used_sources.add(src)
+    
+    if "website" in fields:
+        website, src = fields["website"]
+        parts.append(f"**Website**: {website} [SOURCE {src}]")
+        used_sources.add(src)
+    
+    if "address" in fields:
+        address, src = fields["address"]
+        parts.append(f"**Address**: {address} [SOURCE {src}]")
+        used_sources.add(src)
+    
+    answer = "Here is the contact information from the document:\n" + "\n".join(parts)
+    
+    return ExtractedAnswer(
+        answer=answer,
+        used_source_numbers=tuple(sorted(used_sources)),
+    )
+
+
+
 field_value_question_kind = _query_kind
 

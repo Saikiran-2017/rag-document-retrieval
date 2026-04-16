@@ -37,6 +37,7 @@ from app.llm.deterministic_extraction import (
     try_answer_document_metadata_question,
     try_answer_section_navigation_fallback,
     try_build_grounded_document_overview,
+    try_extract_contact_info_bundle_answer,
     try_extract_field_from_raw_library,
     try_extract_field_value_answer,
 )
@@ -1092,6 +1093,31 @@ def _answer_user_query_impl(
                         assistant_note=ga.validation_warning,
                     ),
                     routing="grounded_deterministic_extract",
+                    retrieval_ran=True,
+                    retrieval_hit_count=len(hits),
+                    fallback_to_general=False,
+                    **common_diag,
+                )
+            # Grouped contact info bundle for continuation queries ("details" after field lookup)
+            contact_bundle = try_extract_contact_info_bundle_answer(query, hits)
+            if contact_bundle is not None:
+                fixed_b, warn_b = validate_grounded_answer(
+                    contact_bundle.answer, hits, unknown_phrase=UNKNOWN_PHRASE
+                )
+                ga_b = GroundedAnswer(
+                    answer=fixed_b,
+                    sources=chunks_to_source_refs(hits),
+                    validation_warning=warn_b,
+                )
+                return _finalize_answer(
+                    AssistantTurn(
+                        mode="grounded",
+                        text=ga_b.answer,
+                        grounded=ga_b,
+                        hits=hits,
+                        assistant_note=ga_b.validation_warning,
+                    ),
+                    routing="grounded_deterministic_contact_bundle",
                     retrieval_ran=True,
                     retrieval_hit_count=len(hits),
                     fallback_to_general=False,
