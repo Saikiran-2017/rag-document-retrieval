@@ -34,7 +34,8 @@ _DOCUMENT_SCOPE = re.compile(
     r"|what\s+projects|projects?\s+mentioned|programs?\s+mentioned|initiatives?\s+mentioned"
     r"|what\s+technologies|technologies\s+(used|does|do|are)|technology\s+stack"
     r"|how\s+many\s+employees|employee\s+count|headcount|workforce\s+size"
-    r"|website\b|web\s*site|homepage|contact\s+email|contact\s+number"
+    r"|website\b|web\s*site|homepage|contact\s+email|contact\s+number|contact\s+info|contact\s+information"
+    r"|tell\s+me\s+more|details|elaborate|more\s+details|expand|what\s+else"
     r"|\bdoes\s+[A-Z][a-z]+\s+[A-Z][a-z]+\s+know\b"
     r")\b",
     re.I,
