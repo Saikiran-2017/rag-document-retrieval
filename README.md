@@ -85,22 +85,6 @@ One shared **`app/`** domain layer powers a **Streamlit** workspace and a **Fast
 
 ---
 
-## Screenshots
-
-### Next.js
-
-<p align="center">
-  <img src="docs/images/nextjs-homepage.png" alt="Next.js landing page with empty library" width="780" />
-  <br /><em>Next.js: Starting state (empty)</em>
-</p>
-
-<p align="center">
-  <img src="docs/images/nextjs-01-library-ready.png" alt="Next.js sidebar: library listed and Ready after sync" width="780" />
-  <br /><em>Next.js: Library ready after sync</em>
-</p>
-
----
-
 ## Local setup
 
 **Prerequisites:** Python **3.11+**, Node **20+** (for `web/`), [OpenAI API key](https://platform.openai.com/).
