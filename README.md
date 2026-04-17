@@ -12,6 +12,22 @@ Document-grounded Q&A with explicit routing: answers **cite your PDFs, Word docs
 
 ---
 
+## Screenshots
+
+### Next.js
+
+<p align="center">
+  <img src="docs/images/nextjs-homepage.png" alt="Next.js landing page with empty library" width="780" />
+  <br /><em>Next.js: Starting state (empty)</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/nextjs-01-library-ready.png" alt="Next.js sidebar: library listed and Ready after sync" width="780" />
+  <br /><em>Next.js: Library ready after sync</em>
+</p>
+
+---
+
 ## Overview
 
 One shared **`app/`** domain layer powers a **Streamlit** workspace and a **FastAPI + Next.js** client. Frontends stay thin: retrieval, trust gates, and generation live in Python, not duplicated in the browser.
@@ -71,18 +87,6 @@ One shared **`app/`** domain layer powers a **Streamlit** workspace and a **Fast
 
 ## Screenshots
 
-Add PNGs under **`docs/images/`** (see **[docs/images/README.md](docs/images/README.md)**). Use the filenames below so README embeds resolve once files exist.
-
-| # | Suggested filename | What to capture |
-|---|--------------------|-----------------|
-| 1 | `nextjs-homepage.png` | Next.js fresh page load (empty state) |
-| 2 | `nextjs-01-library-ready.png` | Next.js sidebar: **Files in library** + **Ready** after **Sync**. |
-| 3 | `nextjs-02-chat-grounded-citations.png` | Main pane: grounded answer with **`[SOURCE n]`** and body text. |
-| 4 | `nextjs-03-sources-panel.png` | Same turn: source list / snippets (if visible). |
-| 5 | `streamlit-homepage.png` | Streamlit fresh page load (empty state) |
-| 6 | `streamlit-01-grounded-sources.png` | Streamlit: grounded reply + **sources / excerpts** expanders. |
-| 7 | `streamlit-02-library-sync.png` | Streamlit: library path + **Sync** / index status. |
-
 ### Next.js
 
 <p align="center">
@@ -93,33 +97,6 @@ Add PNGs under **`docs/images/`** (see **[docs/images/README.md](docs/images/REA
 <p align="center">
   <img src="docs/images/nextjs-01-library-ready.png" alt="Next.js sidebar: library listed and Ready after sync" width="780" />
   <br /><em>Next.js: Library ready after sync</em>
-</p>
-
-<p align="center">
-  <img src="docs/images/nextjs-02-chat-grounded-citations.png" alt="Next.js chat: grounded answer with SOURCE citations" width="780" />
-  <br /><em>Next.js: Grounded answer with [SOURCE n]</em>
-</p>
-
-<p align="center">
-  <img src="docs/images/nextjs-03-sources-panel.png" alt="Next.js sources panel showing cited passages" width="780" />
-  <br /><em>Next.js: Source snippets panel</em>
-</p>
-
-### Streamlit
-
-<p align="center">
-  <img src="docs/images/streamlit-homepage.png" alt="Streamlit landing page with upload area" width="780" />
-  <br /><em>Streamlit: Starting state (empty)</em>
-</p>
-
-<p align="center">
-  <img src="docs/images/streamlit-01-grounded-sources.png" alt="Streamlit: grounded answer with sources" width="780" />
-  <br /><em>Streamlit: Grounded answer with sources and excerpts</em>
-</p>
-
-<p align="center">
-  <img src="docs/images/streamlit-02-library-sync.png" alt="Streamlit sidebar showing library and sync status" width="780" />
-  <br /><em>Streamlit: Library management and sync</em>
 </p>
 
 ---
