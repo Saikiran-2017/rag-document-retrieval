@@ -6,6 +6,8 @@ Document-grounded Q&A with explicit routing: answers **cite your PDFs, Word docs
 
 **Stack:** Python · OpenAI (embeddings + chat) · LangChain · **FAISS** · **BM25 hybrid** · **Streamlit** · **FastAPI** · **Next.js** (TypeScript) · SQLite · Docker
 
+**Live Demo:** https://rag-document-retrieval.onrender.com/
+
 **Docs:** [Deployment](DEPLOYMENT.md) · [Eval harness](eval/README.md) · [Screenshot assets](docs/images/README.md)
 
 ---
