@@ -290,12 +290,12 @@ def main():
             result = validate_query(doc_type, doc_content, query_kind, query_text, None)
             all_results.append(result)
             
-            status_icon = "✓ PASS" if result.status == "PASS" else "✗ FAIL"
+            status_icon = "[PASS]" if result.status == "PASS" else "[FAIL]"
             print(f"\n{status_icon} | {query_kind.upper()}")
             print(f"   Query: {query_text}")
             print(f"   Result: {result.result}")
             if result.weakness:
-                print(f"   ⚠ WEAKNESS: {result.weakness}")
+                print(f"   [!] WEAKNESS: {result.weakness}")
     
     # Summary
     print("\n" + "=" * 100)
@@ -305,8 +305,8 @@ def main():
     passed = sum(1 for r in all_results if r.status == "PASS")
     failed = sum(1 for r in all_results if r.status == "FAIL")
     
-    print(f"\n✓ PASSED: {passed}/{len(all_results)}")
-    print(f"✗ FAILED: {failed}/{len(all_results)}")
+    print(f"\n[PASSED]: {passed}/{len(all_results)}")
+    print(f"[FAILED]: {failed}/{len(all_results)}")
     
     if failed > 0:
         print(f"\nFailed Tests:")
