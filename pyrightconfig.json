@@ -1,0 +1,19 @@
+{
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Windows",
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["app", "tests", "scripts", "streamlit_app.py"],
+  "exclude": [
+    "**/__pycache__",
+    "**/.*",
+    ".git",
+    ".pytest_cache",
+    "*.egg-info",
+    "**/node_modules",
+    ".venv",
+    "venv",
+    "env"
+  ],
+  "typeCheckingMode": "basic"
+}
