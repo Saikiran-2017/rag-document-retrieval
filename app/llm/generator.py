@@ -29,6 +29,14 @@ _WEB_BLOCK_URL_RE = re.compile(r"^URL:\s*(\S+)", re.MULTILINE)
 def _urls_from_web_context_block(web_context_block: str) -> list[str]:
     return _WEB_BLOCK_URL_RE.findall(web_context_block or "")
 
+
+def _remove_emdashes(text: str) -> str:
+    """Remove em-dashes from text, replacing with commas for readability."""
+    if not text:
+        return text
+    # Replace em-dashes (—) with commas for clean output
+    return text.replace("—", ",")
+
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 
 # FAISS L2 distance on retrieved chunks: lower is closer. Above this, treat as weak match.
@@ -363,13 +371,13 @@ def _yield_llm_stream(model: ChatOpenAI, messages: list[SystemMessage | HumanMes
         c = getattr(chunk, "content", None)
         if c:
             if isinstance(c, str):
-                yield c
+                yield _remove_emdashes(c)
             elif isinstance(c, list):
                 for b in c:
                     if isinstance(b, dict) and b.get("type") == "text":
-                        yield str(b.get("text", ""))
+                        yield _remove_emdashes(str(b.get("text", "")))
                     elif isinstance(b, str):
-                        yield b
+                        yield _remove_emdashes(b)
 
 
 def _coerce_text_content(content: Any) -> str:
@@ -497,7 +505,7 @@ def generate_document_task_answer(
     )
     logger.info("Calling chat model for document task %r (%s chunk(s))", task, len(retrieved_chunks))
     response = model.invoke(messages)
-    answer = _coerce_text_content(response.content).strip()
+    answer = _remove_emdashes(_coerce_text_content(response.content).strip())
     if not answer:
         answer = UNKNOWN_PHRASE
     fixed, warn = validate_grounded_answer(answer, retrieved_chunks, unknown_phrase=UNKNOWN_PHRASE)
@@ -528,7 +536,7 @@ def generate_general_answer(
     ]
     logger.info("Calling chat model for general answer (no retrieval)")
     response = model.invoke(messages)
-    out = _coerce_text_content(response.content).strip()
+    out = _remove_emdashes(_coerce_text_content(response.content).strip())
     return out if out else "I don't have a response right now."
 
 
@@ -552,7 +560,7 @@ def generate_document_abstain_answer(
     ]
     logger.info("Calling chat model for document-scope abstain (weak retrieval)")
     response = model.invoke(messages)
-    out = _coerce_text_content(response.content).strip()
+    out = _remove_emdashes(_coerce_text_content(response.content).strip())
     return out if out else UNKNOWN_PHRASE
 
 
@@ -744,7 +752,7 @@ def generate_web_grounded_answer(
     model = create_chat_llm(model=chat_model, temperature=0.2, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
     messages = build_web_grounded_messages(query, web_context_block)
     response = model.invoke(messages)
-    return _coerce_text_content(response.content).strip() or "No answer generated."
+    return _remove_emdashes(_coerce_text_content(response.content).strip()) or "No answer generated."
 
 
 def generate_blended_answer(
@@ -760,7 +768,7 @@ def generate_blended_answer(
     model = create_chat_llm(model=chat_model, temperature=0.0, max_tokens=_GROUNDED_ANSWER_MAX_TOKENS)
     messages = build_blended_messages(query, doc_block, web_context_block)
     response = model.invoke(messages)
-    answer = _coerce_text_content(response.content).strip() or UNKNOWN_PHRASE
+    answer = _remove_emdashes(_coerce_text_content(response.content).strip()) or UNKNOWN_PHRASE
     sources = chunks_to_source_refs(doc_chunks)
     fixed, warn = validate_grounded_answer(answer, doc_chunks, unknown_phrase=UNKNOWN_PHRASE)
     wfixed, wwarn = validate_web_markdown_links(fixed, _urls_from_web_context_block(web_context_block))
