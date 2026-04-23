@@ -26,6 +26,11 @@ Document-grounded Q&A with explicit routing: answers **cite your PDFs, Word docs
   <br /><em>Next.js: Library ready after sync</em>
 </p>
 
+<p align="center">
+  <img src="docs/images/My Project.png" alt="Project overview and architecture" width="780" />
+  <br /><em>Project Overview</em>
+</p>
+
 ---
 
 ## Overview
